@@ -1,7 +1,9 @@
-const CACHE_NAME = 'syllabus-ledger-v1';
+const CACHE_NAME = 'syllabus-ledger-v2'; // bumped: app shell now includes styles.css + app.js
 const SHELL_FILES = [
   './',
   './index.html',
+  './styles.css',
+  './app.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
