@@ -1,4 +1,4 @@
-const CACHE_NAME = 'syllabus-ledger-v3'; // bumped: app shell now includes favicon variants
+const CACHE_NAME = 'syllabustrakt-v4'; // rebrand: new logo, palette, timer ring, chapter picker, etc.
 const SHELL_FILES = [
   './',
   './index.html',
@@ -29,12 +29,15 @@ self.addEventListener('activate', (event) => {
 
 // Only cache-serve the app shell itself. Everything else (Supabase calls,
 // fonts, etc.) always goes to the network so your data stays live.
+const SHELL_FILENAMES = SHELL_FILES.filter(f => f !== './').map(f => f.replace('./', ''));
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  const isShellFile = SHELL_FILES.some((f) => url.pathname.endsWith(f.replace('./', '')));
+  const isRoot = url.pathname === '/' || url.pathname.endsWith('/');
+  const isShellFile = isRoot || SHELL_FILENAMES.some((f) => url.pathname.endsWith(f));
 
-  if (event.request.method !== 'GET' || !isShellFile) {
-    return; // let the browser handle it normally (network)
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || !isShellFile) {
+    return; // let the browser handle it normally (network) — includes all Supabase/CDN calls
   }
 
   event.respondWith(

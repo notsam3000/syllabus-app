@@ -1,5 +1,5 @@
 /* =========================================================
-   Syllabus Ledger — app logic
+   SyllabusTrakt — app logic
    Talks to Supabase for cross-device sync (see SUPABASE_URL /
    SUPABASE_ANON_KEY below), then renders two pages from one
    in-memory `state` object: the syllabus tracker (Home) and
@@ -19,6 +19,34 @@ const DEFAULT_SUBJECTS = [
   'English (Language and Literature)','Physical Education'
 ];
 
+/** Fresh defaults for state.focus.settings. Centralized so a new setting
+ *  (like the reminder fields) can be added once here and still get
+ *  safely backfilled for people who saved data before it existed —
+ *  see ensureFocusShape() below. */
+function defaultFocusSettings(){
+  return {
+    dailyGoalMinutes: 240,
+    pomodoroMinutes: 25,
+    breakMinutes: 5,
+    reminderEnabled: false,
+    reminderTime: '18:00',       // 'HH:MM', local time
+    lastReminderDateStr: null    // guards against firing more than once/day
+  };
+}
+
+/** Makes sure state.focus exists and has every settings key, merging in
+ *  any new defaults without clobbering values the user already saved.
+ *  Called after loading or refetching data, so old saved rows upgrade
+ *  smoothly instead of breaking when a new setting is added. */
+function ensureFocusShape(){
+  if(!state.focus){
+    state.focus = { settings: defaultFocusSettings(), sessions: [] };
+    return;
+  }
+  state.focus.settings = Object.assign(defaultFocusSettings(), state.focus.settings);
+  if(!state.focus.sessions) state.focus.sessions = [];
+}
+
 // state.subjects  -> syllabus data (Home page)
 // state.focus     -> { settings, sessions } for the Focus page
 // Both are persisted together as one JSON blob in Supabase (see scheduleSave below).
@@ -32,7 +60,7 @@ function makeDefaultState(){
   return {
     subjects: DEFAULT_SUBJECTS.map(name => ({ id: uid(), name, chapters: [] })),
     focus: {
-      settings: { dailyGoalMinutes: 240, pomodoroMinutes: 25, breakMinutes: 5 },
+      settings: defaultFocusSettings(),
       sessions: []
     }
   };
@@ -53,9 +81,7 @@ async function loadState(){
     if(error) throw error;
     if(data && data.payload && data.payload.subjects){
       state = data.payload;
-      if(!state.focus){
-        state.focus = { settings: { dailyGoalMinutes: 240, pomodoroMinutes: 25, breakMinutes: 5 }, sessions: [] };
-      }
+      ensureFocusShape();
       return;
     }
   }catch(e){
@@ -126,9 +152,7 @@ async function refetchAndMerge(){
     if(error) throw error;
     if(data && data.payload && data.payload.subjects){
       state = data.payload;
-      if(!state.focus){
-        state.focus = { settings: { dailyGoalMinutes: 240, pomodoroMinutes: 25, breakMinutes: 5 }, sessions: [] };
-      }
+      ensureFocusShape();
       renderSubjects();
       renderTotals();
       renderFocusPage();
@@ -210,12 +234,12 @@ function renderSubjects(){
   const container = document.getElementById('subjects');
   container.innerHTML = '';
 
-  state.subjects.forEach(subject => {
+  state.subjects.forEach((subject, index) => {
     const { total, done, pct } = subjectStats(subject);
     const isOpen = subject.id === openSubjectId;
 
     const card = document.createElement('div');
-    card.className = 'subject-card' + (isOpen ? ' open' : '');
+    card.className = `subject-card accent-${index % 6}` + (isOpen ? ' open' : '');
     card.dataset.id = subject.id;
 
     const head = document.createElement('div');
@@ -459,8 +483,33 @@ function populateSubjectSelect(){
   const prev = sel.value;
   sel.innerHTML = '<option value="">No subject</option>' +
     state.subjects.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
-  if(prev) sel.value = prev;
+  if(prev && state.subjects.some(s => s.id === prev)) sel.value = prev;
+  populateChapterSelect(sel.value);
 }
+
+/** Fills the chapter dropdown from whichever subject is currently
+ *  selected — this is what replaced the old free-text "what are you
+ *  focusing on?" field, so a session always ties back to a real
+ *  chapter from the syllabus. */
+function populateChapterSelect(subjectId){
+  const chapterSel = document.getElementById('focusChapterSelect');
+  const subject = state.subjects.find(s => s.id === subjectId);
+  const prev = chapterSel.value;
+
+  if(!subject || subject.chapters.length === 0){
+    chapterSel.innerHTML = '<option value="">General focus (no chapters yet)</option>';
+    chapterSel.value = '';
+    return;
+  }
+
+  chapterSel.innerHTML = '<option value="">General focus</option>' +
+    subject.chapters.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  if(prev && subject.chapters.some(c => c.id === prev)) chapterSel.value = prev;
+}
+
+document.getElementById('focusSubjectSelect').addEventListener('change', (e) => {
+  populateChapterSelect(e.target.value);
+});
 
 function setMode(mode){
   if(timer.phase !== 'idle') return; // don't allow mode switch mid-session
@@ -489,15 +538,23 @@ function saveSession(durationSeconds){
 }
 
 function startSession(){
-  const input = document.getElementById('focusLabelInput');
-  const sel = document.getElementById('focusSubjectSelect');
-  timer.label = input.value;
-  timer.subjectId = sel.value;
+  const subjectSel = document.getElementById('focusSubjectSelect');
+  const chapterSel = document.getElementById('focusChapterSelect');
+  const chapterOption = chapterSel.options[chapterSel.selectedIndex];
+
+  timer.subjectId = subjectSel.value;
+  // Store the chapter's actual text (not just its id) so history still
+  // reads correctly even if that chapter gets renamed or deleted later.
+  timer.label = chapterOption ? chapterOption.textContent : 'General focus';
   timer.accumulatedMs = 0;
   timer.phaseStartEpoch = Date.now();
   timer.phase = 'running';
   clearInterval(timer.intervalId);
   timer.intervalId = setInterval(tick, 1000);
+
+  enterFocusFullscreen();
+  ensureNotificationPermission().then(() => showRunningNotification());
+
   renderFocusPage();
 }
 
@@ -508,6 +565,7 @@ function pauseSession(){
   timer.phaseStartEpoch = null;
   clearInterval(timer.intervalId);
   timer.phase = timer.phase === 'break' ? 'breakPaused' : 'paused';
+  updateRunningNotification();
   renderFocusPage();
 }
 
@@ -515,6 +573,7 @@ function resumeSession(){
   timer.phaseStartEpoch = Date.now();
   timer.phase = timer.phase === 'breakPaused' ? 'break' : 'running';
   timer.intervalId = setInterval(tick, 1000);
+  updateRunningNotification();
   renderFocusPage();
 }
 
@@ -528,6 +587,8 @@ function stopSession(){
   timer.phase = 'idle';
   timer.accumulatedMs = 0;
   timer.phaseStartEpoch = null;
+  exitFocusFullscreen();
+  closeRunningNotification();
   renderFocusPage();
   renderStats();
   renderChart();
@@ -552,9 +613,11 @@ function tick(){
         timer.accumulatedMs = 0;
         timer.phaseStartEpoch = Date.now();
         timer.phase = 'break';
+        celebratePomodoro();
         renderStats();
         renderChart();
         renderFocusPage();
+        updateRunningNotification();
         return;
       }
     } else if(timer.phase === 'break'){
@@ -564,32 +627,56 @@ function tick(){
         timer.phase = 'idle';
         timer.accumulatedMs = 0;
         timer.phaseStartEpoch = null;
+        exitFocusFullscreen();
+        closeRunningNotification();
+        flashSaved("Break's over — ready for another round?");
         renderFocusPage();
         return;
       }
     }
   }
   updateTimerDisplay();
+  updateRunningNotification();
 }
 
-const BASE_TITLE = 'Syllabus Ledger';
+/** Brief bounce on the ring + a toast, so finishing a pomodoro actually
+ *  feels like something instead of just silently switching to break. */
+function celebratePomodoro(){
+  const ring = document.getElementById('timerRingWrap');
+  ring.classList.add('celebrate');
+  setTimeout(() => ring.classList.remove('celebrate'), 500);
+  flashSaved('🎉 Pomodoro done — take a break!');
+}
+
+const BASE_TITLE = 'SyllabusTrakt';
+const RING_CIRCUMFERENCE = 653.45; // 2 * PI * r(104), matches the SVG circle in index.html
 
 function updateTimerDisplay(){
   const settings = getFocusSettings();
   const clockEl = document.getElementById('timerClock');
   const phaseEl = document.getElementById('timerPhase');
   const subEl = document.getElementById('timerSub');
+  const ringWrap = document.getElementById('timerRingWrap');
+  const ringProgress = document.getElementById('ringProgress');
   const elapsed = getPhaseElapsedSeconds();
+  const isBreak = timer.phase === 'break' || timer.phase === 'breakPaused';
 
-  let clockText;
+  let clockText, ratio;
   if(timer.mode === 'stopwatch'){
     clockText = fmtClock(elapsed);
+    // No fixed target to count down to, so the ring just fills up over
+    // an arbitrary 60-minute lap and loops — still gives a sense of
+    // motion without implying a deadline that doesn't exist.
+    ratio = (elapsed % 3600) / 3600;
   } else {
-    const target = timer.phase === 'break' || timer.phase === 'breakPaused'
-      ? settings.breakMinutes*60 : settings.pomodoroMinutes*60;
+    const target = isBreak ? settings.breakMinutes*60 : settings.pomodoroMinutes*60;
     clockText = fmtClock(Math.max(0, target - elapsed));
+    ratio = target > 0 ? Math.min(1, elapsed / target) : 0;
   }
   clockEl.textContent = clockText;
+
+  ringProgress.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - ratio));
+  ringProgress.classList.toggle('break', isBreak);
 
   const phaseLabels = {
     idle: 'Ready to focus',
@@ -599,6 +686,10 @@ function updateTimerDisplay(){
     breakPaused: 'Break paused'
   };
   phaseEl.textContent = phaseLabels[timer.phase];
+
+  const isActive = timer.phase === 'running' || timer.phase === 'break';
+  ringWrap.classList.toggle('pulsing', isActive);
+  ringWrap.classList.toggle('break', isBreak);
 
   if(timer.phase !== 'idle' && timer.label){
     const subjName = state.subjects.find(s => s.id === timer.subjectId);
@@ -629,6 +720,146 @@ function updateTabIndicator(clockText, phaseLabel){
  *  visible even while browsing the Home page. */
 function updateLiveDot(){
   document.getElementById('focusLiveDot').classList.toggle('hidden', timer.phase === 'idle');
+}
+
+/* ====================================================================
+   FULLSCREEN MODE — the timer takes over the whole screen while a
+   session is running, so it feels like an actual focus tool rather
+   than one card among many. Uses the standard Fullscreen API, which
+   needs a user gesture (the Start tap qualifies) and isn't supported
+   in Safari on iOS — there we just skip it silently and the timer
+   still works normally, un-fullscreened.
+   ==================================================================== */
+function enterFocusFullscreen(){
+  document.body.classList.add('fullscreen-timer');
+  document.getElementById('fullscreenExitBtn').classList.remove('hidden');
+  const el = document.documentElement;
+  if(el.requestFullscreen){
+    el.requestFullscreen().catch(() => { /* not supported/allowed here — the CSS-only fullscreen look still applies */ });
+  }
+}
+
+function exitFocusFullscreen(){
+  document.body.classList.remove('fullscreen-timer');
+  document.getElementById('fullscreenExitBtn').classList.add('hidden');
+  if(document.fullscreenElement && document.exitFullscreen){
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+// If the user backs out of true fullscreen with the OS/browser's own
+// gesture (Esc, Android back, swipe), keep our CSS-only layout in sync
+// rather than leaving the exit button visible with nothing to exit.
+document.addEventListener('fullscreenchange', () => {
+  if(!document.fullscreenElement && timer.phase === 'idle'){
+    document.body.classList.remove('fullscreen-timer');
+    document.getElementById('fullscreenExitBtn').classList.add('hidden');
+  }
+});
+document.getElementById('fullscreenExitBtn').addEventListener('click', () => {
+  // Un-fullscreens the view without stopping the session underneath.
+  document.body.classList.remove('fullscreen-timer');
+  document.getElementById('fullscreenExitBtn').classList.add('hidden');
+  if(document.fullscreenElement && document.exitFullscreen){
+    document.exitFullscreen().catch(() => {});
+  }
+});
+
+/* ====================================================================
+   BACKGROUND NOTIFICATION — keeps the timer visible even when you've
+   switched to a different app entirely (e.g. a lecture video), not
+   just a different browser tab. Updates roughly once a second while
+   the page is alive, replacing the same notification via `tag` rather
+   than stacking new ones. Feature-detected: silently does nothing
+   where Notifications/service workers aren't supported (this is a
+   known gap on iOS Safari outside of an installed home-screen app).
+   ==================================================================== */
+function notificationsSupported(){
+  return 'Notification' in window && 'serviceWorker' in navigator;
+}
+
+async function ensureNotificationPermission(){
+  if(!notificationsSupported()) return false;
+  if(Notification.permission === 'granted') return true;
+  if(Notification.permission === 'denied') return false;
+  try{
+    const result = await Notification.requestPermission();
+    return result === 'granted';
+  }catch(e){
+    return false;
+  }
+}
+
+async function showRunningNotification(){
+  updateRunningNotification();
+}
+
+async function updateRunningNotification(){
+  if(!notificationsSupported() || Notification.permission !== 'granted') return;
+  if(timer.phase === 'idle') return;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const clockEl = document.getElementById('timerClock');
+    const phaseEl = document.getElementById('timerPhase');
+    await reg.showNotification(BASE_TITLE, {
+      tag: 'focus-timer',
+      body: `${clockEl.textContent} · ${phaseEl.textContent}${timer.label ? ' — ' + timer.label : ''}`,
+      icon: 'icon-192.png',
+      silent: true,
+      requireInteraction: false
+    });
+  }catch(e){
+    console.error('notification update failed', e);
+  }
+}
+
+async function closeRunningNotification(){
+  if(!notificationsSupported()) return;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const notifs = await reg.getNotifications({ tag: 'focus-timer' });
+    notifs.forEach(n => n.close());
+  }catch(e){ /* nothing to clean up */ }
+}
+
+/* ====================================================================
+   DAILY STUDY REMINDER
+   Best-effort only: a plain website has no way to wake up a browser
+   that's fully closed, since there's no push server behind this app.
+   What this CAN do is fire a local notification once per day, at or
+   after the chosen time, for as long as the app happens to be open in
+   some tab — including a backgrounded one, since the check below runs
+   on a normal interval that keeps ticking in the background. Opening
+   the app later in the day also fires it retroactively if it hasn't
+   gone off yet, so it's not purely "must be open at the exact minute."
+   ==================================================================== */
+async function checkDailyReminder(){
+  const settings = getFocusSettings();
+  if(!settings.reminderEnabled) return;
+
+  const now = new Date();
+  const todayStr = now.toDateString();
+  if(settings.lastReminderDateStr === todayStr) return;
+
+  const [h, m] = settings.reminderTime.split(':').map(Number);
+  const reminderMoment = new Date();
+  reminderMoment.setHours(h, m, 0, 0);
+  if(now < reminderMoment) return;
+
+  const granted = await ensureNotificationPermission();
+  if(granted){
+    try{
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(BASE_TITLE, {
+        tag: 'daily-reminder',
+        body: "Haven't started today's focus session yet — even 25 minutes helps.",
+        icon: 'icon-192.png'
+      });
+    }catch(e){ console.error('reminder notification failed', e); }
+  }
+
+  state.focus.settings.lastReminderDateStr = todayStr;
+  scheduleSave();
 }
 
 function renderTimerActions(){
@@ -857,6 +1088,8 @@ document.getElementById('focusSettingsBtn').addEventListener('click', () => {
   document.getElementById('goalHoursInput').value = (s.dailyGoalMinutes/60).toString();
   document.getElementById('pomoMinInput').value = s.pomodoroMinutes;
   document.getElementById('breakMinInput').value = s.breakMinutes;
+  document.getElementById('reminderEnabledInput').checked = s.reminderEnabled;
+  document.getElementById('reminderTimeInput').value = s.reminderTime;
   document.getElementById('settingsOverlay').classList.add('open');
 });
 document.getElementById('settingsCancelBtn').addEventListener('click', () => {
@@ -865,15 +1098,29 @@ document.getElementById('settingsCancelBtn').addEventListener('click', () => {
 document.getElementById('settingsOverlay').addEventListener('click', (e) => {
   if(e.target.id === 'settingsOverlay') document.getElementById('settingsOverlay').classList.remove('open');
 });
-document.getElementById('settingsSaveBtn').addEventListener('click', () => {
+document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
   const goalHours = parseFloat(document.getElementById('goalHoursInput').value) || 4;
   const pomoMin = parseInt(document.getElementById('pomoMinInput').value) || 25;
   const breakMin = parseInt(document.getElementById('breakMinInput').value) || 5;
+  const reminderEnabled = document.getElementById('reminderEnabledInput').checked;
+  const reminderTime = document.getElementById('reminderTimeInput').value || '18:00';
+
+  const prevSettings = getFocusSettings();
   state.focus.settings = {
     dailyGoalMinutes: Math.round(goalHours*60),
     pomodoroMinutes: pomoMin,
-    breakMinutes: breakMin
+    breakMinutes: breakMin,
+    reminderEnabled,
+    reminderTime,
+    // Only reset the "already fired today" guard if the reminder was
+    // just turned on or its time changed — otherwise flipping settings
+    // open/closed would re-fire a reminder that already went off today.
+    lastReminderDateStr: (reminderEnabled && (!prevSettings.reminderEnabled || prevSettings.reminderTime !== reminderTime))
+      ? null : prevSettings.lastReminderDateStr
   };
+
+  if(reminderEnabled) await ensureNotificationPermission();
+
   document.getElementById('settingsOverlay').classList.remove('open');
   updateTimerDisplay();
   renderStats();
@@ -969,7 +1216,7 @@ function showPage(page){
 
   if(page === 'home'){
     document.getElementById('appbarEyebrow').textContent = 'Class 12 · Commerce';
-    document.getElementById('appbarTitle').textContent = 'Syllabus Ledger';
+    document.getElementById('appbarTitle').textContent = 'SyllabusTrakt';
     renderTotals();
   } else {
     document.getElementById('appbarEyebrow').textContent = 'Deep work';
@@ -997,6 +1244,9 @@ window.addEventListener('focus', () => {
 // Belt-and-braces polling so changes from another device show up here
 // even if you never switch tabs away and back.
 setInterval(refetchAndMerge, 20000);
+// Daily reminder check — see checkDailyReminder() for the honest caveat
+// about what a plain website can and can't do here.
+setInterval(checkDailyReminder, 60000);
 
 // Registers the PWA service worker so the app can be installed and its
 // shell (not your data — that always comes from Supabase) loads offline.
@@ -1014,4 +1264,5 @@ if('serviceWorker' in navigator){
   renderMilestones();
   renderFocusPage();
   showPage('home');
+  checkDailyReminder();
 })();

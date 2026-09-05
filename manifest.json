@@ -1,12 +1,12 @@
 {
-  "name": "Syllabus Ledger",
-  "short_name": "Syllabus",
-  "description": "Track your class 12 syllabus and revision progress, subject by subject.",
+  "name": "SyllabusTrakt",
+  "short_name": "Trakt",
+  "description": "Track your class 12 syllabus and focus sessions, subject by subject.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#FCFAFF",
-  "theme_color": "#45569E",
+  "background_color": "#FFF3E6",
+  "theme_color": "#FF6B5A",
   "orientation": "portrait-primary",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },

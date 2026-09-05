@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Syllabus Ledger</title>
-<meta name="theme-color" content="#45569E">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>SyllabusTrakt</title>
+<meta name="theme-color" content="#FF6B5A">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" id="faviconLink" href="favicon.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Syllabus">
+<meta name="apple-mobile-web-app-title" content="Trakt">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&family=Roboto+Flex:opsz,wght@8..144,400..700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Roboto+Flex:opsz,wght@8..144,400..700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -22,7 +22,7 @@
   <div class="appbar-row">
     <div class="appbar-titles">
       <p class="appbar-eyebrow" id="appbarEyebrow">Class 12 · Commerce</p>
-      <h1 id="appbarTitle">Syllabus Ledger</h1>
+      <h1 id="appbarTitle">SyllabusTrakt</h1>
     </div>
     <button class="pct-chip" id="pctChip" aria-label="view progress details">0%</button>
   </div>
@@ -49,16 +49,34 @@
     <button class="segment-btn" id="segStopwatch">Stopwatch</button>
   </div>
 
-  <div class="timer-card">
-    <div class="timer-phase" id="timerPhase">Ready to focus</div>
-    <div class="timer-clock" id="timerClock">25:00</div>
-    <div class="timer-sub" id="timerSub"></div>
+  <div class="timer-card" id="timerCard">
+    <div class="timer-ring-wrap" id="timerRingWrap">
+      <svg class="timer-ring" viewBox="0 0 240 240">
+        <defs>
+          <linearGradient id="ringGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF6B5A"/>
+            <stop offset="100%" stop-color="#FFC145"/>
+          </linearGradient>
+          <linearGradient id="ringGradientBreak" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#16C79A"/>
+            <stop offset="100%" stop-color="#5EE6C4"/>
+          </linearGradient>
+        </defs>
+        <circle class="ring-track" cx="120" cy="120" r="104"/>
+        <circle class="ring-progress" id="ringProgress" cx="120" cy="120" r="104"/>
+      </svg>
+      <div class="timer-ring-center">
+        <div class="timer-phase" id="timerPhase">Ready to focus</div>
+        <div class="timer-clock" id="timerClock">25:00</div>
+        <div class="timer-sub" id="timerSub"></div>
+      </div>
+    </div>
 
     <div class="timer-setup" id="timerSetup">
-      <label for="focusLabelInput">What are you focusing on?</label>
-      <input class="m3-field" id="focusLabelInput" type="text" placeholder="e.g. Accounts — Partnership chapter">
-      <label for="focusSubjectSelect">Subject (optional)</label>
+      <label for="focusSubjectSelect">Subject</label>
       <select class="m3-field" id="focusSubjectSelect"></select>
+      <label for="focusChapterSelect">Chapter</label>
+      <select class="m3-field" id="focusChapterSelect"></select>
     </div>
 
     <div class="timer-actions" id="timerActions"></div>
@@ -111,6 +129,12 @@
   </button>
 </nav>
 
+<!-- Shown only while the timer is running full-screen; lets you back out
+     of full-screen without ending the session. -->
+<button class="fullscreen-exit hidden" id="fullscreenExitBtn" aria-label="exit full screen">
+  <svg viewBox="0 0 24 24" fill="none"><path d="M9 4v3a2 2 0 01-2 2H4M20 9h-3a2 2 0 01-2-2V4M4 15h3a2 2 0 012 2v3M15 20v-3a2 2 0 012-2h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</button>
+
 <div class="toast" id="saveToast">saved</div>
 
 <!-- Confirm dialog -->
@@ -125,7 +149,6 @@
   </div>
 </div>
 
-<!-- More options dialog (holds rarely-used / destructive actions, kept out of the main UI) -->
 <!-- Progress detail dialog (opened by tapping the % chip). Shows a
      closer look at whichever page you're on, with Reset all data
      tucked below — one tap further away than the everyday UI. -->
@@ -157,6 +180,18 @@
     <div class="settings-field">
       <label for="breakMinInput">Break length (minutes)</label>
       <input class="m3-field" style="width:100%;" id="breakMinInput" type="number" min="1" step="1">
+    </div>
+    <div class="dialog-divider"></div>
+    <div class="settings-field">
+      <label class="switch-row">
+        <span>Daily study reminder</span>
+        <input type="checkbox" id="reminderEnabledInput">
+      </label>
+    </div>
+    <div class="settings-field" id="reminderTimeField">
+      <label for="reminderTimeInput">Remind me at</label>
+      <input class="m3-field" style="width:100%;" id="reminderTimeInput" type="time">
+      <p class="settings-hint">Only fires while this app is open in a browser tab — a plain website can't wake up a fully closed browser without a push server.</p>
     </div>
     <div class="dialog-actions">
       <button class="btn-text" id="settingsCancelBtn">Cancel</button>
