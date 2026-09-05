@@ -6,7 +6,7 @@
 <title>Syllabus Ledger</title>
 <meta name="theme-color" content="#45569E">
 <link rel="manifest" href="manifest.json">
-<link rel="icon" href="icon-192.png">
+<link rel="icon" id="faviconLink" href="favicon.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -25,6 +25,9 @@
       <h1 id="appbarTitle">Syllabus Ledger</h1>
     </div>
     <div class="pct-chip" id="pctChip">0%</div>
+    <button class="icon-btn" id="moreMenuBtn" aria-label="more options">
+      <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="5" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="19" r="1.6" fill="currentColor"/></svg>
+    </button>
   </div>
 </div>
 
@@ -51,7 +54,7 @@
 
   <div class="timer-card">
     <div class="timer-phase" id="timerPhase">Ready to focus</div>
-    <div class="timer-clock" id="timerClock">60:00</div>
+    <div class="timer-clock" id="timerClock">25:00</div>
     <div class="timer-sub" id="timerSub"></div>
 
     <div class="timer-setup" id="timerSetup">
@@ -75,6 +78,25 @@
     <div class="stats-track"><div class="stats-track-fill" id="statsTrackFill" style="width:0%"></div></div>
   </div>
 
+  <div class="chart-card">
+    <div class="segmented small">
+      <button class="segment-btn active" data-range="week">Week</button>
+      <button class="segment-btn" data-range="month">Month</button>
+      <button class="segment-btn" data-range="year">Year</button>
+    </div>
+    <div class="chart-nav">
+      <button class="icon-btn" id="chartPrevBtn" aria-label="previous period">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span id="chartRangeLabel">This week</span>
+      <button class="icon-btn" id="chartNextBtn" aria-label="next period">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div id="chartTotal" class="chart-total">0h 0m total</div>
+    <div id="chartSvgWrap"></div>
+  </div>
+
   <button class="btn-tonal wide" style="width:100%;" id="historyBtn">View session history</button>
 </div>
 
@@ -84,15 +106,15 @@
     Home
   </button>
   <button class="nav-item" data-page="focus" id="navFocus">
-    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><path d="M12 8v4l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="nav-icon-wrap">
+      <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><path d="M12 8v4l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="live-dot hidden" id="focusLiveDot"></span>
+    </span>
     Focus
   </button>
 </nav>
 
-<footer>
-  <span id="saveNote" class="save-note">saved</span>
-  <button class="reset-link" id="resetBtn">reset all data</button>
-</footer>
+<div class="toast" id="saveToast">saved</div>
 
 <!-- Confirm dialog -->
 <div class="overlay" id="confirmOverlay">
@@ -102,6 +124,17 @@
     <div class="dialog-actions">
       <button class="btn-text" id="confirmCancelBtn">Cancel</button>
       <button class="btn-filled error" id="confirmOkBtn">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- More options dialog (holds rarely-used / destructive actions, kept out of the main UI) -->
+<div class="overlay" id="moreOverlay">
+  <div class="dialog-card">
+    <h3>More options</h3>
+    <button class="menu-item danger" id="resetBtn">Reset all data</button>
+    <div class="dialog-actions">
+      <button class="btn-text" id="moreCancelBtn">Close</button>
     </div>
   </div>
 </div>

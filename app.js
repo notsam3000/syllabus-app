@@ -67,8 +67,15 @@ async function loadState(){
 // Debounced save: every state change calls scheduleSave() instead of
 // saving immediately, so rapid edits (e.g. bulk-adding chapters) only
 // trigger one network write instead of one per change.
+//
+// `pendingSave` is also how the cross-device polling below avoids a race:
+// it refuses to overwrite local state with a server fetch while a save
+// is in flight, so we never clobber an edit that hasn't reached the
+// server yet.
 let saveTimer = null;
+let pendingSave = false;
 function scheduleSave(){
+  pendingSave = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try{
@@ -80,15 +87,55 @@ function scheduleSave(){
     }catch(e){
       console.error('save failed', e);
       flashSaved('save failed — check your Supabase keys');
+    }finally{
+      pendingSave = false;
     }
   }, 250);
 }
 
 function flashSaved(msg){
-  const el = document.getElementById('saveNote');
+  const el = document.getElementById('saveToast');
   el.textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 1200);
+}
+
+/* ====================================================================
+   CROSS-DEVICE SYNC (polling)
+   Supabase holds the single source of truth. Besides saving on every
+   local change, we periodically re-fetch it here so that changes made
+   on *another* device (or another tab) show up here too — on tab
+   focus/visibility (for an instant refresh when you switch back) and
+   every 20s while the tab is open (to catch changes without needing to
+   switch away and back). We skip the refetch whenever a local save is
+   still pending, so we never overwrite an edit before it's saved.
+
+   Note: this is "last write wins" — if two devices edit at the exact
+   same moment, whichever save lands last on the server wins. Fine for
+   one person using their own devices; not a real-time collaboration
+   system.
+   ==================================================================== */
+async function refetchAndMerge(){
+  if(pendingSave) return;
+  try{
+    const { data, error } = await supabaseClient
+      .from('syllabus_data')
+      .select('payload')
+      .eq('id', ROW_ID)
+      .maybeSingle();
+    if(error) throw error;
+    if(data && data.payload && data.payload.subjects){
+      state = data.payload;
+      if(!state.focus){
+        state.focus = { settings: { dailyGoalMinutes: 240, pomodoroMinutes: 25, breakMinutes: 5 }, sessions: [] };
+      }
+      renderSubjects();
+      renderTotals();
+      renderFocusPage();
+    }
+  }catch(e){
+    console.error('background refresh failed', e);
+  }
 }
 
 /* ====================================================================
@@ -280,13 +327,28 @@ function escapeHtml(str){
   return d.innerHTML;
 }
 
+/* ---- "More options" menu — keeps rarely-needed/destructive actions
+   (currently just Reset) out of the everyday UI, one tap away instead
+   of always on screen. ---- */
+document.getElementById('moreMenuBtn').addEventListener('click', () => {
+  document.getElementById('moreOverlay').classList.add('open');
+});
+document.getElementById('moreCancelBtn').addEventListener('click', () => {
+  document.getElementById('moreOverlay').classList.remove('open');
+});
+document.getElementById('moreOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'moreOverlay') document.getElementById('moreOverlay').classList.remove('open');
+});
+
 document.getElementById('resetBtn').addEventListener('click', () => {
+  document.getElementById('moreOverlay').classList.remove('open');
   openConfirmDialog(
     'Reset all data?',
     'This clears every subject, chapter, and focus session and starts fresh. This can\'t be undone.',
     () => {
       state = makeDefaultState();
       openSubjectId = null;
+      chartOffset = 0;
       renderSubjects();
       renderTotals();
       renderFocusPage();
@@ -308,17 +370,40 @@ document.getElementById('resetBtn').addEventListener('click', () => {
 
    Only 'running'/'paused' time counts as focus and gets saved as a
    session; break time never does. See tick() and stopSession().
+
+   IMPORTANT — why timestamps, not a tick counter:
+   Browsers heavily throttle (or fully suspend) setInterval in
+   background/inactive tabs to save battery. If we counted "+1 second"
+   per tick, 30 real minutes in a hidden tab could show as only 1-2
+   minutes, because most ticks simply never fired. Instead we record
+   the real Date.now() when a phase starts (phaseStartEpoch) plus how
+   much time it already had banked before that (accumulatedMs), and
+   compute elapsed as an actual clock difference. That's correct no
+   matter how badly the interval was throttled while hidden — the
+   moment the tab wakes up (or the next tick fires), the true elapsed
+   time is recalculated from real timestamps, not from counted ticks.
    ==================================================================== */
 let timer = {
-  mode: 'pomodoro',       // 'pomodoro' | 'stopwatch'
-  phase: 'idle',          // idle | running | paused | break | breakPaused
-  elapsed: 0,
+  mode: 'pomodoro',        // 'pomodoro' | 'stopwatch'
+  phase: 'idle',           // idle | running | paused | break | breakPaused
+  accumulatedMs: 0,        // time banked from before the current run (e.g. before a pause)
+  phaseStartEpoch: null,   // Date.now() when the current run started, or null if not running
   label: '',
   subjectId: '',
   intervalId: null
 };
 
 function getFocusSettings(){ return state.focus.settings; }
+
+/** Real elapsed seconds in the current phase, computed from timestamps
+ *  (not tick counts) so it's correct even after the tab was backgrounded. */
+function getPhaseElapsedSeconds(){
+  let ms = timer.accumulatedMs;
+  if(timer.phaseStartEpoch !== null){
+    ms += Date.now() - timer.phaseStartEpoch;
+  }
+  return ms / 1000;
+}
 
 function fmtClock(totalSeconds){
   const s = Math.max(0, Math.round(totalSeconds));
@@ -375,7 +460,8 @@ function startSession(){
   const sel = document.getElementById('focusSubjectSelect');
   timer.label = input.value;
   timer.subjectId = sel.value;
-  timer.elapsed = 0;
+  timer.accumulatedMs = 0;
+  timer.phaseStartEpoch = Date.now();
   timer.phase = 'running';
   clearInterval(timer.intervalId);
   timer.intervalId = setInterval(tick, 1000);
@@ -383,12 +469,17 @@ function startSession(){
 }
 
 function pauseSession(){
+  // Freeze the elapsed time into accumulatedMs and stop the running clock,
+  // so resuming later continues from exactly where it left off.
+  timer.accumulatedMs = getPhaseElapsedSeconds() * 1000;
+  timer.phaseStartEpoch = null;
   clearInterval(timer.intervalId);
   timer.phase = timer.phase === 'break' ? 'breakPaused' : 'paused';
   renderFocusPage();
 }
 
 function resumeSession(){
+  timer.phaseStartEpoch = Date.now();
   timer.phase = timer.phase === 'breakPaused' ? 'break' : 'running';
   timer.intervalId = setInterval(tick, 1000);
   renderFocusPage();
@@ -397,37 +488,49 @@ function resumeSession(){
 function stopSession(){
   clearInterval(timer.intervalId);
   const wasFocusPhase = timer.phase === 'running' || timer.phase === 'paused';
-  if(wasFocusPhase && timer.elapsed >= 5){
-    saveSession(timer.elapsed);
+  const elapsed = getPhaseElapsedSeconds();
+  if(wasFocusPhase && elapsed >= 5){
+    saveSession(elapsed);
   }
   timer.phase = 'idle';
-  timer.elapsed = 0;
+  timer.accumulatedMs = 0;
+  timer.phaseStartEpoch = null;
   renderFocusPage();
   renderStats();
+  renderChart();
 }
 
-/** Runs once per second while a timer is active; advances the clock and
- *  handles automatic pomodoro -> break -> idle transitions. */
+/** Runs once per second while a timer is active (though it may fire far
+ *  less often in a backgrounded tab — see the note above). Recomputes
+ *  the real elapsed time from timestamps and handles automatic
+ *  pomodoro -> break -> idle transitions. Also called directly when the
+ *  tab regains visibility, so the display snaps to the correct time and
+ *  any missed transition happens immediately rather than waiting for
+ *  the next throttled tick. */
 function tick(){
-  timer.elapsed++;
   const settings = getFocusSettings();
+  const elapsed = getPhaseElapsedSeconds();
+
   if(timer.mode === 'pomodoro'){
     if(timer.phase === 'running'){
       const target = settings.pomodoroMinutes * 60;
-      if(timer.elapsed >= target){
+      if(elapsed >= target){
         saveSession(target);
-        timer.elapsed = 0;
+        timer.accumulatedMs = 0;
+        timer.phaseStartEpoch = Date.now();
         timer.phase = 'break';
         renderStats();
+        renderChart();
         renderFocusPage();
         return;
       }
     } else if(timer.phase === 'break'){
       const target = settings.breakMinutes * 60;
-      if(timer.elapsed >= target){
+      if(elapsed >= target){
         clearInterval(timer.intervalId);
         timer.phase = 'idle';
-        timer.elapsed = 0;
+        timer.accumulatedMs = 0;
+        timer.phaseStartEpoch = null;
         renderFocusPage();
         return;
       }
@@ -436,19 +539,24 @@ function tick(){
   updateTimerDisplay();
 }
 
+const BASE_TITLE = 'Syllabus Ledger';
+
 function updateTimerDisplay(){
   const settings = getFocusSettings();
   const clockEl = document.getElementById('timerClock');
   const phaseEl = document.getElementById('timerPhase');
   const subEl = document.getElementById('timerSub');
+  const elapsed = getPhaseElapsedSeconds();
 
+  let clockText;
   if(timer.mode === 'stopwatch'){
-    clockEl.textContent = fmtClock(timer.elapsed);
+    clockText = fmtClock(elapsed);
   } else {
     const target = timer.phase === 'break' || timer.phase === 'breakPaused'
       ? settings.breakMinutes*60 : settings.pomodoroMinutes*60;
-    clockEl.textContent = fmtClock(Math.max(0, target - timer.elapsed));
+    clockText = fmtClock(Math.max(0, target - elapsed));
   }
+  clockEl.textContent = clockText;
 
   const phaseLabels = {
     idle: 'Ready to focus',
@@ -465,6 +573,29 @@ function updateTimerDisplay(){
   } else {
     subEl.textContent = '';
   }
+
+  updateTabIndicator(timer.phase === 'idle' ? null : clockText, phaseLabels[timer.phase]);
+  updateLiveDot();
+}
+
+/** Shows the running timer in the browser tab itself (title + favicon
+ *  badge), so you can tell a session is still going without switching
+ *  back to this tab — handy when you've tabbed away to a lecture video. */
+function updateTabIndicator(clockText, phaseLabel){
+  const favicon = document.getElementById('faviconLink');
+  if(clockText){
+    document.title = `${clockText} · ${phaseLabel} — ${BASE_TITLE}`;
+    favicon.href = 'favicon-active.png';
+  } else {
+    document.title = BASE_TITLE;
+    favicon.href = 'favicon.png';
+  }
+}
+
+/** Small dot on the bottom-nav Focus icon so a running session is
+ *  visible even while browsing the Home page. */
+function updateLiveDot(){
+  document.getElementById('focusLiveDot').classList.toggle('hidden', timer.phase === 'idle');
 }
 
 function renderTimerActions(){
@@ -523,6 +654,151 @@ function renderStats(){
   }
 }
 
+/* ====================================================================
+   FOCUS CHART — Week / Month / Year bar chart of logged focus time.
+   chartView picks the granularity; chartOffset moves backward/forward
+   through periods (0 = the current week/month/year, -1 = previous, ...).
+   The chart is drawn as a plain inline SVG built by hand (no charting
+   library) so the app stays a handful of static files with no build
+   step.
+   ==================================================================== */
+let chartView = 'week';   // 'week' | 'month' | 'year'
+let chartOffset = 0;      // 0 = current period, -1 = previous, +1 = next (capped)
+
+function startOfWeek(d){
+  // Treats Monday as the first day of the week.
+  const date = new Date(d);
+  const day = (date.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  date.setHours(0,0,0,0);
+  date.setDate(date.getDate() - day);
+  return date;
+}
+
+/** Sums focus seconds per bucket for the current chartView/chartOffset,
+ *  returning bars ready to draw plus a human-readable range label. */
+function computeChartData(){
+  const sessions = state.focus.sessions;
+  const now = new Date();
+  const bars = [];
+  let rangeLabel = '';
+
+  if(chartView === 'week'){
+    const start = startOfWeek(now);
+    start.setDate(start.getDate() + chartOffset*7);
+    const end = new Date(start); end.setDate(end.getDate()+6);
+    const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    for(let i=0;i<7;i++){
+      const d = new Date(start); d.setDate(start.getDate()+i);
+      const seconds = sumSecondsOnDate(sessions, d);
+      bars.push({ label: dayNames[i], seconds, isToday: d.toDateString() === now.toDateString() });
+    }
+    rangeLabel = chartOffset === 0 ? 'This week' :
+      `${start.toLocaleDateString(undefined,{month:'short',day:'numeric'})} – ${end.toLocaleDateString(undefined,{month:'short',day:'numeric'})}`;
+
+  } else if(chartView === 'month'){
+    const base = new Date(now.getFullYear(), now.getMonth() + chartOffset, 1);
+    const daysInMonth = new Date(base.getFullYear(), base.getMonth()+1, 0).getDate();
+    for(let day=1; day<=daysInMonth; day++){
+      const d = new Date(base.getFullYear(), base.getMonth(), day);
+      const seconds = sumSecondsOnDate(sessions, d);
+      // Label every 5th day (plus day 1) to keep the axis readable.
+      const label = (day === 1 || day % 5 === 0) ? String(day) : '';
+      bars.push({ label, seconds, isToday: d.toDateString() === now.toDateString() });
+    }
+    rangeLabel = chartOffset === 0 ? 'This month' :
+      base.toLocaleDateString(undefined, { month:'long', year:'numeric' });
+
+  } else { // year
+    const year = now.getFullYear() + chartOffset;
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    for(let m=0; m<12; m++){
+      const seconds = sessions
+        .filter(s => {
+          const d = new Date(s.startedAt);
+          return d.getFullYear() === year && d.getMonth() === m;
+        })
+        .reduce((sum,s) => sum + s.durationSeconds, 0);
+      bars.push({ label: monthNames[m], seconds, isToday: m === now.getMonth() && year === now.getFullYear() });
+    }
+    rangeLabel = String(year);
+  }
+
+  const totalSeconds = bars.reduce((sum,b) => sum + b.seconds, 0);
+  return { bars, rangeLabel, totalSeconds };
+}
+
+function sumSecondsOnDate(sessions, date){
+  const dayStr = date.toDateString();
+  return sessions
+    .filter(s => new Date(s.startedAt).toDateString() === dayStr)
+    .reduce((sum,s) => sum + s.durationSeconds, 0);
+}
+
+/** Builds the bar-chart SVG by hand and injects it into the page. */
+function renderChartSvg(bars){
+  const wrap = document.getElementById('chartSvgWrap');
+  const w = 320, h = 130;
+  const padTop = 8, padBottom = 18, padSide = 4;
+  const chartH = h - padTop - padBottom;
+  const barGap = 3;
+  const barW = (w - padSide*2) / bars.length - barGap;
+
+  const maxSeconds = Math.max(...bars.map(b => b.seconds), 1);
+  const goalSeconds = getFocusSettings().dailyGoalMinutes * 60;
+  // Scale to whichever is taller: the tallest bar, or the goal line
+  // (only meaningful for the week/month views where bars are per-day).
+  const scaleMax = Math.max(maxSeconds, chartView !== 'year' ? goalSeconds : 0) * 1.1 || 1;
+
+  let barsSvg = '';
+  bars.forEach((b, i) => {
+    const x = padSide + i * (barW + barGap);
+    const barH = Math.max(b.seconds > 0 ? 2 : 0, (b.seconds / scaleMax) * chartH);
+    const y = padTop + (chartH - barH);
+    const cls = b.isToday ? 'chart-bar today' : 'chart-bar';
+    barsSvg += `<rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="2"/>`;
+    if(b.label){
+      barsSvg += `<text class="chart-axis-label" x="${(x+barW/2).toFixed(1)}" y="${h-4}" text-anchor="middle">${b.label}</text>`;
+    }
+  });
+
+  let goalLineSvg = '';
+  if(chartView !== 'year' && goalSeconds > 0 && goalSeconds < scaleMax){
+    const y = padTop + (chartH - (goalSeconds/scaleMax)*chartH);
+    goalLineSvg = `<line class="chart-goal-line" x1="${padSide}" y1="${y.toFixed(1)}" x2="${w-padSide}" y2="${y.toFixed(1)}"/>`;
+  }
+
+  wrap.innerHTML = `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">${goalLineSvg}${barsSvg}</svg>`;
+}
+
+function renderChart(){
+  document.querySelectorAll('#page-focus .segmented.small .segment-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.range === chartView);
+  });
+
+  const { bars, rangeLabel, totalSeconds } = computeChartData();
+  document.getElementById('chartRangeLabel').textContent = rangeLabel;
+  document.getElementById('chartTotal').textContent = `${fmtDuration(totalSeconds)} total`;
+  renderChartSvg(bars);
+
+  // Don't let "next" go past the current period.
+  document.getElementById('chartNextBtn').disabled = chartOffset >= 0;
+}
+
+document.querySelectorAll('#page-focus .segmented.small .segment-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    chartView = btn.dataset.range;
+    chartOffset = 0;
+    renderChart();
+  });
+});
+document.getElementById('chartPrevBtn').addEventListener('click', () => {
+  chartOffset -= 1;
+  renderChart();
+});
+document.getElementById('chartNextBtn').addEventListener('click', () => {
+  if(chartOffset < 0){ chartOffset += 1; renderChart(); }
+});
+
 function renderFocusPage(){
   populateSubjectSelect();
   document.getElementById('segPomodoro').classList.toggle('active', timer.mode==='pomodoro');
@@ -536,6 +812,7 @@ function renderFocusPage(){
   updateTimerDisplay();
   renderTimerActions();
   renderStats();
+  renderChart();
 }
 
 document.getElementById('segPomodoro').addEventListener('click', () => setMode('pomodoro'));
@@ -567,6 +844,7 @@ document.getElementById('settingsSaveBtn').addEventListener('click', () => {
   document.getElementById('settingsOverlay').classList.remove('open');
   updateTimerDisplay();
   renderStats();
+  renderChart();
   scheduleSave();
 });
 
@@ -626,6 +904,7 @@ function renderHistory(){
           state.focus.sessions = state.focus.sessions.filter(s => s.id !== id);
           renderHistory();
           renderStats();
+          renderChart();
           scheduleSave();
         }
       );
@@ -667,6 +946,24 @@ function showPage(page){
 }
 document.getElementById('navHome').addEventListener('click', () => showPage('home'));
 document.getElementById('navFocus').addEventListener('click', () => showPage('focus'));
+
+/* ---- Tab visibility: snap the timer to the correct time immediately
+   when you switch back (instead of waiting for the next tick, which
+   may have been throttled), and opportunistically pull in any changes
+   made on another device while this tab was away. ---- */
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible'){
+    if(timer.phase !== 'idle') tick();
+    refetchAndMerge();
+  }
+});
+window.addEventListener('focus', () => {
+  if(timer.phase !== 'idle') tick();
+  refetchAndMerge();
+});
+// Belt-and-braces polling so changes from another device show up here
+// even if you never switch tabs away and back.
+setInterval(refetchAndMerge, 20000);
 
 // Registers the PWA service worker so the app can be installed and its
 // shell (not your data — that always comes from Supabase) loads offline.

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'syllabus-ledger-v2'; // bumped: app shell now includes styles.css + app.js
+const CACHE_NAME = 'syllabus-ledger-v3'; // bumped: app shell now includes favicon variants
 const SHELL_FILES = [
   './',
   './index.html',
@@ -6,7 +6,9 @@ const SHELL_FILES = [
   './app.js',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './favicon.png',
+  './favicon-active.png'
 ];
 
 self.addEventListener('install', (event) => {

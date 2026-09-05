@@ -386,6 +386,80 @@
     color:var(--md-on-surface-variant); padding:14px 10px 6px 10px;
   }
 
+  /* ---------- Save toast (replaces the old always-visible footer) ---------- */
+  .toast{
+    position:fixed;
+    left:50%;
+    bottom:calc(84px + env(safe-area-inset-bottom));
+    transform:translate(-50%, 6px);
+    background:var(--md-on-surface);
+    color:var(--md-surface);
+    font-size:12.5px;
+    font-weight:500;
+    padding:8px 16px;
+    border-radius:var(--r-full);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 0.25s ease, transform 0.25s ease;
+    z-index:15;
+  }
+  .toast.show{ opacity:0.92; transform:translate(-50%, 0); }
+
+  /* ---------- "More options" menu (reset lives here, out of everyday view) ---------- */
+  .menu-item{
+    display:block;
+    width:100%;
+    text-align:left;
+    font-family:inherit;
+    font-size:14.5px;
+    font-weight:600;
+    padding:14px 4px;
+    border:none;
+    background:none;
+    cursor:pointer;
+    color:var(--md-on-surface);
+    border-bottom:1px solid var(--md-surface-container-high);
+  }
+  .menu-item.danger{ color:var(--md-error); }
+
+  /* ---------- Live-session dot badge on the bottom-nav Focus icon ---------- */
+  .nav-icon-wrap{ position:relative; display:inline-flex; }
+  .live-dot{
+    position:absolute;
+    top:-2px; right:-3px;
+    width:8px; height:8px;
+    border-radius:50%;
+    background:var(--md-secondary);
+    border:1.5px solid var(--md-surface-container-high);
+  }
+
+  /* ---------- Focus: Week/Month/Year trend chart ---------- */
+  .chart-card{
+    background:var(--md-surface-container-low);
+    border-radius:var(--r-lg);
+    padding:18px 18px 8px 18px;
+    margin-bottom:16px;
+  }
+  .segmented.small{ margin-bottom:14px; }
+  .chart-nav{
+    display:flex; align-items:center; justify-content:center; gap:14px;
+    font-size:13.5px; font-weight:600; color:var(--md-on-surface-variant);
+    margin-bottom:2px;
+  }
+  .chart-total{
+    text-align:center;
+    font-size:13px;
+    color:var(--md-on-surface-variant);
+    margin-bottom:8px;
+  }
+  #chartSvgWrap{ width:100%; }
+  #chartSvgWrap svg{ width:100%; height:auto; display:block; }
+  .chart-bar{ fill:var(--md-primary); }
+  .chart-bar.today{ fill:var(--md-secondary); }
+  .chart-goal-line{ stroke:var(--md-outline); stroke-width:1; stroke-dasharray:3,3; }
+  .chart-axis-label{ fill:var(--md-on-surface-variant); font-size:9px; font-family:inherit; }
+  .chart-value-label{ fill:var(--md-on-surface-variant); font-size:8px; font-family:inherit; }
+
   @media (max-width:420px){
     .appbar{ padding:calc(14px + env(safe-area-inset-top)) 16px 12px 16px; }
     .appbar h1{ font-size:20px; }
