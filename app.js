@@ -143,6 +143,20 @@ function flashSaved(msg){
    ==================================================================== */
 async function refetchAndMerge(){
   if(pendingSave) return;
+
+  // Don't let a background refresh tear down and rebuild the subject
+  // list while someone's mid-sentence in the "add a chapter" field or
+  // the bulk-paste textarea — renderSubjects() replaces those DOM nodes
+  // wholesale, which drops keyboard focus and silently discards
+  // whatever wasn't submitted yet. Typing alone never calls
+  // scheduleSave() (only pressing Add does), so without this guard the
+  // poll below fires right through an in-progress edit.
+  const active = document.activeElement;
+  const isTypingInSubjects = active &&
+    (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
+    active.closest('#subjects');
+  if(isTypingInSubjects) return;
+
   try{
     const { data, error } = await supabaseClient
       .from('syllabus_data')
@@ -395,6 +409,67 @@ document.getElementById('moreCancelBtn').addEventListener('click', () => {
 });
 document.getElementById('moreOverlay').addEventListener('click', (e) => {
   if(e.target.id === 'moreOverlay') document.getElementById('moreOverlay').classList.remove('open');
+});
+
+/* ---- Backup: export/import the whole state as a downloadable JSON
+   file. Lives in the same dialog as Reset since it's the natural
+   "before you do something risky" companion to it. ---- */
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const dateStr = new Date().toISOString().slice(0,10);
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `syllabustrakt-backup-${dateStr}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  document.getElementById('moreOverlay').classList.remove('open');
+});
+
+document.getElementById('importBtn').addEventListener('click', () => {
+  document.getElementById('moreOverlay').classList.remove('open');
+  document.getElementById('importFileInput').click();
+});
+
+document.getElementById('importFileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = ''; // allow re-selecting the same file later
+  if(!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try{
+      parsed = JSON.parse(reader.result);
+    }catch(err){
+      flashSaved('Import failed — not a valid backup file');
+      return;
+    }
+    if(!parsed || !Array.isArray(parsed.subjects)){
+      flashSaved('Import failed — this file doesn\'t look like a SyllabusTrakt backup');
+      return;
+    }
+
+    openConfirmDialog(
+      'Import this backup?',
+      'This replaces everything currently in the app — all subjects, chapters, and focus history — with what\'s in this file. This can\'t be undone.',
+      () => {
+        state = parsed;
+        ensureFocusShape();
+        openSubjectId = null;
+        chartOffset = 0;
+        renderSubjects();
+        renderTotals();
+        renderFocusPage();
+        scheduleSave();
+        flashSaved('backup imported');
+      }
+    );
+  };
+  reader.onerror = () => flashSaved('Import failed — couldn\'t read that file');
+  reader.readAsText(file);
 });
 
 document.getElementById('resetBtn').addEventListener('click', () => {

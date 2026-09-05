@@ -1,4 +1,4 @@
-const CACHE_NAME = 'syllabustrakt-v4'; // rebrand: new logo, palette, timer ring, chapter picker, etc.
+const CACHE_NAME = 'syllabustrakt-v5'; // added backup export/import + fixed background-sync focus theft
 const SHELL_FILES = [
   './',
   './index.html',
