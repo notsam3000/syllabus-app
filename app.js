@@ -1,7 +1,9 @@
 /* =========================================================
    SyllabusTrakt — app logic
-   Talks to Supabase for cross-device sync (see SUPABASE_URL /
-   SUPABASE_ANON_KEY below), then renders two pages from one
+   Talks to Supabase for cross-device sync AND email (magic-link)
+   authentication, so data is private to whoever's logged in. See
+   SUPABASE_URL / SUPABASE_ANON_KEY below, and the AUTH section
+   further down for sign-in/out. Renders two pages from one
    in-memory `state` object: the syllabus tracker (Home) and
    the focus timer + history (Focus).
    ========================================================= */
@@ -9,10 +11,16 @@
 // ====== YOUR SUPABASE DETAILS ======
 const SUPABASE_URL = 'https://chrzbrcwkrvbisdftymb.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNocnpicmN3a3J2YmlzZGZ0eW1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1MTM1NzgsImV4cCI6MjEwNDA4OTU3OH0.cXg6sp-TZxQRv2awAgrMDN-aD_7YPjzQABcKpH_D1lg';
-const ROW_ID = 'sam-syllabus-lucknow';
 // ====================================
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Set once a session is confirmed (see AUTH section). All Supabase reads/
+// writes below key off this instead of a fixed, guessable row id — each
+// signed-in account only ever sees its own row (enforced by the
+// database's row-level security, not just by the app hiding the button).
+let currentUserId = null;
+let currentUserEmail = null;
 
 const DEFAULT_SUBJECTS = [
   'Commerce','Economics','Accounts','Computer Science',
@@ -67,16 +75,17 @@ function makeDefaultState(){
 }
 
 /**
- * Loads the single saved row for this app from Supabase.
- * Falls back to a fresh default state on first run or on any error,
- * so the app is always usable even if the network/table isn't ready.
+ * Loads the signed-in user's saved row from Supabase.
+ * Falls back to a fresh default state on first login (no row yet) or
+ * on any error, so the app is always usable even if the network isn't
+ * cooperating.
  */
 async function loadState(){
   try{
     const { data, error } = await supabaseClient
-      .from('syllabus_data')
+      .from('user_syllabus_data')
       .select('payload')
-      .eq('id', ROW_ID)
+      .eq('user_id', currentUserId)
       .maybeSingle();
     if(error) throw error;
     if(data && data.payload && data.payload.subjects){
@@ -101,18 +110,19 @@ async function loadState(){
 let saveTimer = null;
 let pendingSave = false;
 function scheduleSave(){
+  if(!currentUserId) return; // shouldn't happen — appRoot is hidden until signed in
   pendingSave = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try{
       const { error } = await supabaseClient
-        .from('syllabus_data')
-        .upsert({ id: ROW_ID, payload: state, updated_at: new Date().toISOString() });
+        .from('user_syllabus_data')
+        .upsert({ user_id: currentUserId, payload: state, updated_at: new Date().toISOString() });
       if(error) throw error;
       flashSaved('saved');
     }catch(e){
       console.error('save failed', e);
-      flashSaved('save failed — check your Supabase keys');
+      flashSaved('save failed — check your connection');
     }finally{
       pendingSave = false;
     }
@@ -142,7 +152,7 @@ function flashSaved(msg){
    system.
    ==================================================================== */
 async function refetchAndMerge(){
-  if(pendingSave) return;
+  if(!currentUserId || pendingSave) return;
 
   // Don't let a background refresh tear down and rebuild the subject
   // list while someone's mid-sentence in the "add a chapter" field or
@@ -159,9 +169,9 @@ async function refetchAndMerge(){
 
   try{
     const { data, error } = await supabaseClient
-      .from('syllabus_data')
+      .from('user_syllabus_data')
       .select('payload')
-      .eq('id', ROW_ID)
+      .eq('user_id', currentUserId)
       .maybeSingle();
     if(error) throw error;
     if(data && data.payload && data.payload.subjects){
@@ -229,6 +239,8 @@ function subjectStats(subject){
 const CHECK_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 12.5L9.5 18L20 6" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHEVRON_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEVRON_UP_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEVRON_DOWN_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 function renderTotals(){
   let total = 0, done = 0;
@@ -282,13 +294,17 @@ function renderSubjects(){
       body.appendChild(note);
     }
 
-    subject.chapters.forEach(ch => {
+    subject.chapters.forEach((ch, chIndex) => {
       const row = document.createElement('div');
       row.className = 'chapter-row';
       row.innerHTML = `
         <button class="m3-check ${ch.done ? 'done' : ''}" aria-label="toggle done">${CHECK_SVG}</button>
-        <span class="chapter-name ${ch.done ? 'done' : ''}">${escapeHtml(ch.name)}</span>
-        <button class="icon-btn" aria-label="delete">${TRASH_SVG}</button>
+        <span class="chapter-name ${ch.done ? 'done' : ''}" tabindex="0" role="button" aria-label="edit chapter name">${escapeHtml(ch.name)}</span>
+        <div class="chapter-actions">
+          <button class="icon-btn small" aria-label="move up" ${chIndex === 0 ? 'disabled' : ''}>${CHEVRON_UP_SVG}</button>
+          <button class="icon-btn small" aria-label="move down" ${chIndex === subject.chapters.length - 1 ? 'disabled' : ''}>${CHEVRON_DOWN_SVG}</button>
+          <button class="icon-btn" aria-label="delete">${TRASH_SVG}</button>
+        </div>
       `;
       row.querySelector('.m3-check').addEventListener('click', () => {
         ch.done = !ch.done;
@@ -296,7 +312,58 @@ function renderSubjects(){
         renderTotals();
         scheduleSave();
       });
-      row.querySelector('.icon-btn').addEventListener('click', () => {
+
+      // Tap the name to rename it in place — swaps the span for a text
+      // input, saves on blur/Enter, discards the edit on Escape.
+      const nameEl = row.querySelector('.chapter-name');
+      const startEditing = () => {
+        const input = document.createElement('input');
+        input.className = 'm3-field chapter-edit-input';
+        input.type = 'text';
+        input.value = ch.name;
+        nameEl.replaceWith(input);
+        input.focus();
+        input.select();
+
+        let finished = false;
+        const commit = () => {
+          if(finished) return;
+          finished = true;
+          const val = input.value.trim();
+          if(val) ch.name = val;
+          renderSubjects();
+          renderTotals();
+          scheduleSave();
+        };
+        const cancel = () => {
+          if(finished) return;
+          finished = true;
+          renderSubjects();
+        };
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (e) => {
+          if(e.key === 'Enter') input.blur();
+          else if(e.key === 'Escape'){ finished = true; cancel(); }
+        });
+      };
+      nameEl.addEventListener('click', startEditing);
+      nameEl.addEventListener('keydown', (e) => { if(e.key === 'Enter') startEditing(); });
+
+      const [moveUpBtn, moveDownBtn] = row.querySelectorAll('.icon-btn.small');
+      moveUpBtn.addEventListener('click', () => {
+        if(chIndex === 0) return;
+        [subject.chapters[chIndex-1], subject.chapters[chIndex]] = [subject.chapters[chIndex], subject.chapters[chIndex-1]];
+        renderSubjects();
+        scheduleSave();
+      });
+      moveDownBtn.addEventListener('click', () => {
+        if(chIndex === subject.chapters.length - 1) return;
+        [subject.chapters[chIndex+1], subject.chapters[chIndex]] = [subject.chapters[chIndex], subject.chapters[chIndex+1]];
+        renderSubjects();
+        scheduleSave();
+      });
+
+      row.querySelector('.chapter-actions .icon-btn:not(.small)').addEventListener('click', () => {
         openConfirmDialog(
           'Delete chapter?',
           `"${ch.name}" will be removed from ${subject.name}. This can't be undone.`,
@@ -909,6 +976,7 @@ async function closeRunningNotification(){
    gone off yet, so it's not purely "must be open at the exact minute."
    ==================================================================== */
 async function checkDailyReminder(){
+  if(!state) return; // not signed in / not loaded yet
   const settings = getFocusSettings();
   if(!settings.reminderEnabled) return;
 
@@ -1331,8 +1399,41 @@ if('serviceWorker' in navigator){
   });
 }
 
-// Entry point: load saved data, then render everything once.
-(async function init(){
+/* ====================================================================
+   AUTH — email magic-link sign-in via Supabase Auth.
+   No passwords: entering an email sends a one-time link; clicking it
+   both creates the account (first time) and signs in (every time
+   after), then redirects back here. Supabase's client automatically
+   detects the login token in the URL on page load and fires
+   'SIGNED_IN' below — this is what turns a fresh magic-link click into
+   an actual session, no extra code needed for that part.
+
+   Everything the rest of the app does is gated on this: #appRoot stays
+   hidden and no Supabase reads/writes happen until a user id is
+   confirmed, so signed-out visitors never see or touch anyone's data.
+   ==================================================================== */
+let appStarted = false; // guards against starting the app twice (e.g. INITIAL_SESSION + SIGNED_IN both firing)
+
+function showAuthGate(){
+  document.getElementById('authGate').classList.remove('hidden');
+  document.getElementById('appRoot').classList.add('hidden');
+}
+
+function showAppRoot(){
+  document.getElementById('authGate').classList.add('hidden');
+  document.getElementById('appRoot').classList.remove('hidden');
+}
+
+/** Runs once, the first time a session is confirmed: loads that user's
+ *  data and renders the app. Mirrors the old unconditional init(). */
+async function startApp(user){
+  if(appStarted) return;
+  appStarted = true;
+  currentUserId = user.id;
+  currentUserEmail = user.email;
+  document.getElementById('accountEmailLabel').textContent = `Signed in as ${currentUserEmail}`;
+
+  showAppRoot();
   await loadState();
   renderSubjects();
   renderTotals();
@@ -1340,4 +1441,69 @@ if('serviceWorker' in navigator){
   renderFocusPage();
   showPage('home');
   checkDailyReminder();
-})();
+}
+
+function setAuthStatus(message, kind){
+  const el = document.getElementById('authStatus');
+  el.textContent = message;
+  el.className = 'auth-status' + (kind ? ' ' + kind : '');
+}
+
+document.getElementById('authSendBtn').addEventListener('click', async () => {
+  const email = document.getElementById('authEmailInput').value.trim();
+  if(!email || !email.includes('@')){
+    setAuthStatus('Enter a valid email address.', 'error');
+    return;
+  }
+  const btn = document.getElementById('authSendBtn');
+  btn.disabled = true;
+  setAuthStatus('Sending your link…');
+  try{
+    const { error } = await supabaseClient.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    });
+    if(error) throw error;
+    setAuthStatus(`Check ${email} for a sign-in link. You can close this tab.`, 'success');
+  }catch(e){
+    console.error('magic link failed', e);
+    setAuthStatus('Couldn\'t send the link — check your connection and try again.', 'error');
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('signOutBtn').addEventListener('click', () => {
+  document.getElementById('moreOverlay').classList.remove('open');
+  openConfirmDialog(
+    'Sign out?',
+    'You\'ll need to click a new email link to sign back in. Your data stays saved.',
+    async () => {
+      await supabaseClient.auth.signOut();
+      // Reloading is the simplest reliable way to fully reset every
+      // running interval/timer and in-memory variable back to a clean
+      // slate for whoever signs in next on this device.
+      window.location.reload();
+    }
+  );
+});
+
+// Fires on initial load (existing session, or a magic link just
+// completed) and again any time auth state changes afterward.
+supabaseClient.auth.onAuthStateChange((event, session) => {
+  if(session && session.user){
+    startApp(session.user);
+  } else if(!appStarted){
+    showAuthGate();
+  }
+});
+
+// Also check directly in case onAuthStateChange's initial fire is slow —
+// belt and braces, startApp() itself is guarded against running twice.
+supabaseClient.auth.getSession().then(({ data }) => {
+  if(data && data.session && data.session.user){
+    startApp(data.session.user);
+  } else if(!appStarted){
+    showAuthGate();
+  }
+});

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'syllabustrakt-v5'; // added backup export/import + fixed background-sync focus theft
+const CACHE_NAME = 'syllabustrakt-v6'; // added email auth, chapter edit/reorder
 const SHELL_FILES = [
   './',
   './index.html',

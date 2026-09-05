@@ -18,6 +18,21 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+
+<!-- Shown before login / when signed out. Everything else lives inside
+     #appRoot and stays hidden until a session is confirmed. -->
+<div class="auth-gate" id="authGate">
+  <div class="auth-card">
+    <img src="icon-192.png" alt="" class="auth-logo">
+    <h1>SyllabusTrakt</h1>
+    <p class="auth-copy">Sign in with your email to keep your syllabus and focus data private to you, synced across your devices.</p>
+    <input class="m3-field" style="width:100%;" id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email">
+    <button class="btn-filled wide" id="authSendBtn" style="margin-top:10px;">Send magic link</button>
+    <p class="auth-status" id="authStatus"></p>
+  </div>
+</div>
+
+<div class="hidden" id="appRoot">
 <div class="appbar">
   <div class="appbar-row">
     <div class="appbar-titles">
@@ -162,6 +177,9 @@
     <button class="menu-item" id="importBtn">Import backup</button>
     <input type="file" id="importFileInput" accept="application/json" class="hidden">
     <div class="dialog-divider"></div>
+    <p class="settings-hint" id="accountEmailLabel" style="margin-bottom:8px;"></p>
+    <button class="menu-item" id="signOutBtn">Sign out</button>
+    <div class="dialog-divider"></div>
     <button class="menu-item danger" id="resetBtn">Reset all data</button>
     <div class="dialog-actions">
       <button class="btn-text" id="moreCancelBtn">Close</button>
@@ -216,6 +234,8 @@
     <div class="sheet-body" id="historyBody"></div>
   </div>
 </div>
+
+</div><!-- #appRoot -->
 
 <script src="app.js"></script>
 </body>
