@@ -327,12 +327,45 @@ function escapeHtml(str){
   return d.innerHTML;
 }
 
-/* ---- "More options" menu — keeps rarely-needed/destructive actions
-   (currently just Reset) out of the everyday UI, one tap away instead
-   of always on screen. ---- */
-document.getElementById('moreMenuBtn').addEventListener('click', () => {
+/* ---- Progress detail dialog — opened by tapping the % chip in the app
+   bar. Shows a closer look at the current page's numbers, with Reset
+   tucked below it (out of the everyday UI, one tap away). ---- */
+document.getElementById('pctChip').addEventListener('click', () => {
+  renderChipDetail();
   document.getElementById('moreOverlay').classList.add('open');
 });
+
+function renderChipDetail(){
+  const titleEl = document.getElementById('chipDetailTitle');
+  const bigEl = document.getElementById('chipDetailBig');
+  const subEl = document.getElementById('chipDetailSub');
+
+  if(currentPage === 'home'){
+    let total = 0, done = 0;
+    state.subjects.forEach(s => {
+      total += s.chapters.length;
+      done += s.chapters.filter(c => c.done).length;
+    });
+    const pct = total === 0 ? 0 : Math.round((done/total)*100);
+    titleEl.textContent = 'Syllabus progress';
+    bigEl.textContent = pct + '%';
+    subEl.textContent = `${done} of ${total} topics done`;
+  } else {
+    const settings = getFocusSettings();
+    const todayStr = new Date().toDateString();
+    const todaySeconds = state.focus.sessions
+      .filter(s => new Date(s.startedAt).toDateString() === todayStr)
+      .reduce((sum, s) => sum + s.durationSeconds, 0);
+    const goalSeconds = settings.dailyGoalMinutes * 60;
+    const pct = goalSeconds === 0 ? 0 : Math.min(100, Math.round((todaySeconds/goalSeconds)*100));
+    const goalH = Math.floor(settings.dailyGoalMinutes/60);
+    const goalM = settings.dailyGoalMinutes % 60;
+    const goalStr = goalM > 0 ? `${goalH}h ${goalM}m` : `${goalH}h`;
+    titleEl.textContent = "Today's focus";
+    bigEl.textContent = pct + '%';
+    subEl.textContent = `${fmtDuration(todaySeconds)} of ${goalStr} goal`;
+  }
+}
 document.getElementById('moreCancelBtn').addEventListener('click', () => {
   document.getElementById('moreOverlay').classList.remove('open');
 });

@@ -85,7 +85,11 @@
     padding:8px 16px;
     border-radius:var(--r-full);
     white-space:nowrap;
+    border:none;
+    font-family:inherit;
+    cursor:pointer;
   }
+  .pct-chip:active{ opacity:0.8; }
 
   /* ---------- Shared page container ---------- */
   .content{
@@ -421,6 +425,23 @@
     border-bottom:1px solid var(--md-surface-container-high);
   }
   .menu-item.danger{ color:var(--md-error); }
+  .chip-detail-big{
+    font-size:40px;
+    font-weight:700;
+    color:var(--md-primary);
+    line-height:1;
+    margin-bottom:4px;
+  }
+  #chipDetailSub{
+    font-size:13.5px;
+    color:var(--md-on-surface-variant);
+    margin:0 0 4px 0;
+  }
+  .dialog-divider{
+    height:1px;
+    background:var(--md-surface-container-high);
+    margin:16px 0 4px 0;
+  }
 
   /* ---------- Live-session dot badge on the bottom-nav Focus icon ---------- */
   .nav-icon-wrap{ position:relative; display:inline-flex; }
