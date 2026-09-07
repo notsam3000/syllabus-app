@@ -1,4 +1,4 @@
-const CACHE_NAME = 'syllabustrakt-v6'; // added email auth, chapter edit/reorder
+const CACHE_NAME = 'syllabustrakt-v8'; // restored full-page first-visit gate + guest bypass; editable/addable subjects; new default subjects
 const SHELL_FILES = [
   './',
   './index.html',

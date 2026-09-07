@@ -22,9 +22,12 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_
 let currentUserId = null;
 let currentUserEmail = null;
 
+// New subjects/chapters are now fully editable in the app, so these are
+// just a friendly starting point for a brand-new user — not a fixed list.
 const DEFAULT_SUBJECTS = [
-  'Commerce','Economics','Accounts','Computer Science',
-  'English (Language and Literature)','Physical Education'
+  { name: 'Maths', chapters: ['Chap - 1', 'Chap - 2', 'Chap - 3'] },
+  { name: 'Economics', chapters: ['Chap - 1', 'Chap - 2', 'Chap - 3'] },
+  { name: 'Psychology', chapters: ['Chap - 1', 'Chap - 2', 'Chap - 3'] }
 ];
 
 /** Fresh defaults for state.focus.settings. Centralized so a new setting
@@ -66,7 +69,11 @@ function uid(){ return Math.random().toString(36).slice(2,10); }
 
 function makeDefaultState(){
   return {
-    subjects: DEFAULT_SUBJECTS.map(name => ({ id: uid(), name, chapters: [] })),
+    subjects: DEFAULT_SUBJECTS.map(subj => ({
+      id: uid(),
+      name: subj.name,
+      chapters: subj.chapters.map(chName => ({ id: uid(), name: chName, done: false }))
+    })),
     focus: {
       settings: defaultFocusSettings(),
       sessions: []
@@ -101,7 +108,10 @@ async function loadState(){
 
 // Debounced save: every state change calls scheduleSave() instead of
 // saving immediately, so rapid edits (e.g. bulk-adding chapters) only
-// trigger one network write instead of one per change.
+// trigger one network write instead of one per change. This particular
+// function only handles the signed-in (Supabase) path — see
+// scheduleSave() further down, which dispatches here or to
+// guestScheduleSave() depending on whether anyone's logged in.
 //
 // `pendingSave` is also how the cross-device polling below avoids a race:
 // it refuses to overwrite local state with a server fetch while a save
@@ -109,8 +119,8 @@ async function loadState(){
 // server yet.
 let saveTimer = null;
 let pendingSave = false;
-function scheduleSave(){
-  if(!currentUserId) return; // shouldn't happen — appRoot is hidden until signed in
+function scheduleAccountSave(){
+  if(!currentUserId) return; // dispatcher below shouldn't call this otherwise, but just in case
   pendingSave = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
@@ -241,6 +251,7 @@ const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org
 const CHEVRON_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHEVRON_UP_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHEVRON_DOWN_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const PENCIL_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 function renderTotals(){
   let total = 0, done = 0;
@@ -272,16 +283,72 @@ function renderSubjects(){
     head.className = 'subject-head';
     head.innerHTML = `
       <div class="subject-main">
-        <p class="subject-name">${escapeHtml(subject.name)}</p>
+        <p class="subject-name" tabindex="0" role="button" aria-label="edit subject name">${escapeHtml(subject.name)}</p>
         <div class="subject-track"><div class="subject-track-fill" style="width:${pct}%"></div></div>
       </div>
       <span class="subject-frac">${done}/${total}</span>
+      <div class="chapter-actions">
+        <button class="icon-btn small" aria-label="rename subject">${PENCIL_SVG}</button>
+        <button class="icon-btn small" aria-label="delete subject">${TRASH_SVG}</button>
+      </div>
       <span class="expand-icon">${CHEVRON_SVG}</span>
     `;
     head.addEventListener('click', () => {
       openSubjectId = isOpen ? null : subject.id;
       renderSubjects();
     });
+
+    // Renaming a subject — same tap-to-edit pattern as chapters, just
+    // stopping the click from also toggling expand/collapse.
+    const subjectNameEl = head.querySelector('.subject-name');
+    const startEditingSubject = (e) => {
+      e.stopPropagation();
+      const input = document.createElement('input');
+      input.className = 'm3-field chapter-edit-input';
+      input.type = 'text';
+      input.value = subject.name;
+      subjectNameEl.replaceWith(input);
+      input.focus();
+      input.select();
+
+      let finished = false;
+      const commit = () => {
+        if(finished) return;
+        finished = true;
+        const val = input.value.trim();
+        if(val) subject.name = val;
+        renderSubjects();
+        renderTotals();
+        scheduleSave();
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('click', (ev) => ev.stopPropagation());
+      input.addEventListener('keydown', (ev) => {
+        ev.stopPropagation();
+        if(ev.key === 'Enter') input.blur();
+        else if(ev.key === 'Escape'){ finished = true; renderSubjects(); }
+      });
+    };
+    subjectNameEl.addEventListener('click', startEditingSubject);
+    subjectNameEl.addEventListener('keydown', (e) => { if(e.key === 'Enter') startEditingSubject(e); });
+
+    const [renameSubjBtn, deleteSubjBtn] = head.querySelectorAll('.chapter-actions .icon-btn');
+    renameSubjBtn.addEventListener('click', startEditingSubject);
+    deleteSubjBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openConfirmDialog(
+        'Delete subject?',
+        `"${subject.name}" and all ${subject.chapters.length} of its chapters will be removed. This can't be undone.`,
+        () => {
+          state.subjects = state.subjects.filter(s => s.id !== subject.id);
+          if(openSubjectId === subject.id) openSubjectId = null;
+          renderSubjects();
+          renderTotals();
+          scheduleSave();
+        }
+      );
+    });
+
     card.appendChild(head);
 
     const body = document.createElement('div');
@@ -537,6 +604,22 @@ document.getElementById('importFileInput').addEventListener('change', (e) => {
   };
   reader.onerror = () => flashSaved('Import failed — couldn\'t read that file');
   reader.readAsText(file);
+});
+
+/* ---- Add a new subject from the Home page ---- */
+function addSubjectFromInput(){
+  const input = document.getElementById('newSubjectInput');
+  const val = input.value.trim();
+  if(!val) return;
+  state.subjects.push({ id: uid(), name: val, chapters: [] });
+  input.value = '';
+  renderSubjects();
+  renderTotals();
+  scheduleSave();
+}
+document.getElementById('addSubjectBtn').addEventListener('click', addSubjectFromInput);
+document.getElementById('newSubjectInput').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') addSubjectFromInput();
 });
 
 document.getElementById('resetBtn').addEventListener('click', () => {
@@ -1400,41 +1483,221 @@ if('serviceWorker' in navigator){
 }
 
 /* ====================================================================
-   AUTH — email magic-link sign-in via Supabase Auth.
-   No passwords: entering an email sends a one-time link; clicking it
-   both creates the account (first time) and signs in (every time
-   after), then redirects back here. Supabase's client automatically
-   detects the login token in the URL on page load and fires
-   'SIGNED_IN' below — this is what turns a fresh magic-link click into
-   an actual session, no extra code needed for that part.
+   AUTH + GUEST MODE
 
-   Everything the rest of the app does is gated on this: #appRoot stays
-   hidden and no Supabase reads/writes happen until a user id is
-   confirmed, so signed-out visitors never see or touch anyone's data.
+   The app now works for anyone immediately, signed in or not:
+     - Signed in  -> data lives in Supabase, under that account only
+                     (enforced by the database's row-level security),
+                     synced across devices.
+     - Guest      -> data lives in this browser's localStorage only,
+                     stamped with the time it was first created. Once
+                     24 hours pass, it's wiped and a fresh guest slate
+                     starts — the banner's countdown is a real deadline,
+                     not just a nag.
+
+   Signing in is one-time and optional. If there's guest data on this
+   device when you do, it gets folded into your account (see
+   maybeAdoptGuestData) rather than silently discarded.
+
+   Email sign-in itself is a magic link: entering an email sends a
+   one-time link that both creates the account (first time) and signs
+   in (every time after), then redirects back here. Supabase's client
+   detects that link's token in the URL automatically and fires
+   'SIGNED_IN' below.
    ==================================================================== */
-let appStarted = false; // guards against starting the app twice (e.g. INITIAL_SESSION + SIGNED_IN both firing)
+const GUEST_STATE_KEY = 'syllabustrakt-guest-state';
+const GUEST_CREATED_KEY = 'syllabustrakt-guest-created-at';
+const GUEST_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
-function showAuthGate(){
-  document.getElementById('authGate').classList.remove('hidden');
-  document.getElementById('appRoot').classList.add('hidden');
+let appStarted = false;       // guards the one-time startup sequence below
+let guestCountdownTimer = null;
+
+/** True if a state object has anything a person would mind losing —
+ *  used to decide whether guest data can be adopted into an account
+ *  silently, or needs to ask first because the account already has
+ *  its own data. */
+function stateHasContent(s){
+  if(!s) return false;
+  const chapterCount = (s.subjects || []).reduce((sum, subj) => sum + (subj.chapters ? subj.chapters.length : 0), 0);
+  const sessionCount = (s.focus && s.focus.sessions) ? s.focus.sessions.length : 0;
+  return chapterCount > 0 || sessionCount > 0;
 }
 
-function showAppRoot(){
+/* ---- Guest persistence (localStorage, this device only) ---- */
+function loadGuestState(){
+  const createdAtStr = localStorage.getItem(GUEST_CREATED_KEY);
+  const raw = localStorage.getItem(GUEST_STATE_KEY);
+
+  if(createdAtStr && raw){
+    const ageMs = Date.now() - new Date(createdAtStr).getTime();
+    if(ageMs > GUEST_LIFETIME_MS){
+      localStorage.removeItem(GUEST_STATE_KEY);
+      localStorage.removeItem(GUEST_CREATED_KEY);
+      state = makeDefaultState();
+      stampNewGuestSession();
+      flashSaved('Your 24-hour guest data expired and was cleared');
+      return;
+    }
+    try{
+      state = JSON.parse(raw);
+      ensureFocusShape();
+      return;
+    }catch(e){
+      // fall through to a fresh guest state below
+    }
+  }
+  state = makeDefaultState();
+  stampNewGuestSession();
+}
+
+function stampNewGuestSession(){
+  localStorage.setItem(GUEST_CREATED_KEY, new Date().toISOString());
+}
+
+function guestScheduleSave(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try{
+      localStorage.setItem(GUEST_STATE_KEY, JSON.stringify(state));
+      flashSaved('saved on this device');
+    }catch(e){
+      console.error('guest save failed', e);
+      flashSaved('save failed — device storage full?');
+    }
+  }, 250);
+}
+
+/** Wipes guest data early and restarts the 24h clock — used when the
+ *  countdown reaches zero while the app is still open. */
+function expireGuestSessionNow(){
+  localStorage.removeItem(GUEST_STATE_KEY);
+  localStorage.removeItem(GUEST_CREATED_KEY);
+  state = makeDefaultState();
+  stampNewGuestSession();
+  openSubjectId = null;
+  chartOffset = 0;
+  renderSubjects();
+  renderTotals();
+  renderFocusPage();
+  flashSaved('Your 24-hour guest data expired and was cleared');
+}
+
+function checkGuestExpiry(){
+  if(currentUserId) return;
+  const createdAtStr = localStorage.getItem(GUEST_CREATED_KEY);
+  if(!createdAtStr) return;
+  const ageMs = Date.now() - new Date(createdAtStr).getTime();
+  if(ageMs > GUEST_LIFETIME_MS) expireGuestSessionNow();
+  else updateGuestBanner();
+}
+
+function updateGuestBanner(){
+  if(currentUserId) return;
+  const createdAtStr = localStorage.getItem(GUEST_CREATED_KEY);
+  const ageMs = createdAtStr ? Date.now() - new Date(createdAtStr).getTime() : 0;
+  const remainingMs = Math.max(0, GUEST_LIFETIME_MS - ageMs);
+  const h = Math.floor(remainingMs / 3600000);
+  const m = Math.floor((remainingMs % 3600000) / 60000);
+  const remainingStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  document.getElementById('guestBannerText').textContent =
+    `Guest mode — data cleared in ${remainingStr} unless you sign in`;
+}
+
+function showGuestBanner(){
+  document.getElementById('guestBanner').classList.remove('hidden');
+  document.getElementById('accountGuestBlock').classList.remove('hidden');
+  document.getElementById('accountSignedInBlock').classList.add('hidden');
+  updateGuestBanner();
+  clearInterval(guestCountdownTimer);
+  guestCountdownTimer = setInterval(updateGuestBanner, 60000);
+}
+
+function hideGuestBanner(){
+  document.getElementById('guestBanner').classList.add('hidden');
+  document.getElementById('accountGuestBlock').classList.add('hidden');
+  document.getElementById('accountSignedInBlock').classList.remove('hidden');
+  clearInterval(guestCountdownTimer);
+}
+
+/** If this device has guest data saved locally, fold it into the
+ *  account that just signed in. Adopts it automatically when the
+ *  account is otherwise empty (the common "tried it as a guest, then
+ *  signed up" case); asks first if the account already has its own
+ *  data, since importing would replace it. Declining leaves the guest
+ *  data untouched in localStorage rather than deleting it. */
+async function maybeAdoptGuestData(){
+  const raw = localStorage.getItem(GUEST_STATE_KEY);
+  if(!raw) return;
+
+  let guestState;
+  try{ guestState = JSON.parse(raw); }
+  catch(e){
+    localStorage.removeItem(GUEST_STATE_KEY);
+    localStorage.removeItem(GUEST_CREATED_KEY);
+    return;
+  }
+
+  if(!stateHasContent(guestState)){
+    localStorage.removeItem(GUEST_STATE_KEY);
+    localStorage.removeItem(GUEST_CREATED_KEY);
+    return;
+  }
+
+  const adopt = () => {
+    state = guestState;
+    ensureFocusShape();
+    scheduleSave();
+    localStorage.removeItem(GUEST_STATE_KEY);
+    localStorage.removeItem(GUEST_CREATED_KEY);
+    renderSubjects();
+    renderTotals();
+    renderFocusPage();
+    flashSaved('guest data saved to your account');
+  };
+
+  if(!stateHasContent(state)){
+    adopt();
+  } else {
+    openConfirmDialog(
+      'Import your guest data?',
+      'You used this app as a guest on this device before signing in. Importing will replace your account\'s current data with what you added as a guest.',
+      adopt
+    );
+  }
+}
+
+/* ---- Save/load dispatcher: routes to Supabase when signed in, or to
+   localStorage in guest mode. Every other part of the app just calls
+   scheduleSave()/loadState() without caring which mode is active. ---- */
+function scheduleSave(){
+  if(currentUserId) scheduleAccountSave();
+  else guestScheduleSave();
+}
+
+/** Runs exactly once at startup, after the very first auth-state check
+ *  resolves (see the listener below) — decides guest vs. account mode
+ *  and loads the right data either way. The app is visible either way;
+ *  signing in is never required to start using it. */
+/** Runs exactly once at startup, after the very first auth-state check
+ *  resolves (see the listener below) — decides guest vs. account mode
+ *  and loads the right data either way. Called either straight from
+ *  boot() (existing session, or a returning guest who already chose
+ *  guest mode before) or from the full-page gate's "continue without
+ *  an account" button (brand-new visitor choosing guest mode). */
+async function initializeApp(){
   document.getElementById('authGate').classList.add('hidden');
   document.getElementById('appRoot').classList.remove('hidden');
-}
 
-/** Runs once, the first time a session is confirmed: loads that user's
- *  data and renders the app. Mirrors the old unconditional init(). */
-async function startApp(user){
-  if(appStarted) return;
-  appStarted = true;
-  currentUserId = user.id;
-  currentUserEmail = user.email;
-  document.getElementById('accountEmailLabel').textContent = `Signed in as ${currentUserEmail}`;
+  if(currentUserId){
+    document.getElementById('accountEmailLabel').textContent = `Signed in as ${currentUserEmail}`;
+    await loadState();
+    await maybeAdoptGuestData();
+    hideGuestBanner();
+  } else {
+    loadGuestState();
+    showGuestBanner();
+  }
 
-  showAppRoot();
-  await loadState();
   renderSubjects();
   renderTotals();
   renderMilestones();
@@ -1443,67 +1706,121 @@ async function startApp(user){
   checkDailyReminder();
 }
 
-function setAuthStatus(message, kind){
-  const el = document.getElementById('authStatus');
-  el.textContent = message;
-  el.className = 'auth-status' + (kind ? ' ' + kind : '');
-}
-
-document.getElementById('authSendBtn').addEventListener('click', async () => {
-  const email = document.getElementById('authEmailInput').value.trim();
+/** Shared by both the full-page first-visit gate and the smaller
+ *  reusable "sign in" dialog opened later from the guest banner or the
+ *  % pill menu — same API call either way, just different input/status
+ *  elements to read from and write to. */
+async function sendMagicLink(emailInputId, statusElId, buttonId){
+  const email = document.getElementById(emailInputId).value.trim();
+  const setStatus = (msg, kind) => {
+    const el = document.getElementById(statusElId);
+    el.textContent = msg;
+    el.className = 'auth-status' + (kind ? ' ' + kind : '');
+  };
   if(!email || !email.includes('@')){
-    setAuthStatus('Enter a valid email address.', 'error');
+    setStatus('Enter a valid email address.', 'error');
     return;
   }
-  const btn = document.getElementById('authSendBtn');
+  const btn = document.getElementById(buttonId);
   btn.disabled = true;
-  setAuthStatus('Sending your link…');
+  setStatus('Sending your link…');
   try{
     const { error } = await supabaseClient.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: window.location.origin + window.location.pathname }
     });
     if(error) throw error;
-    setAuthStatus(`Check ${email} for a sign-in link. You can close this tab.`, 'success');
+    setStatus(`Check ${email} for a sign-in link.`, 'success');
   }catch(e){
     console.error('magic link failed', e);
-    setAuthStatus('Couldn\'t send the link — check your connection and try again.', 'error');
+    setStatus('Couldn\'t send the link — check your connection and try again.', 'error');
   }finally{
     btn.disabled = false;
   }
+}
+
+function setAuthStatus(message, kind){
+  const el = document.getElementById('authStatus');
+  el.textContent = message;
+  el.className = 'auth-status' + (kind ? ' ' + kind : '');
+}
+
+function openSignInDialog(){
+  document.getElementById('moreOverlay').classList.remove('open');
+  setAuthStatus('');
+  document.getElementById('signInOverlay').classList.add('open');
+}
+document.getElementById('guestBannerSignInBtn').addEventListener('click', openSignInDialog);
+document.getElementById('accountSignInBtn').addEventListener('click', openSignInDialog);
+document.getElementById('signInCancelBtn').addEventListener('click', () => {
+  document.getElementById('signInOverlay').classList.remove('open');
+});
+document.getElementById('signInOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'signInOverlay') document.getElementById('signInOverlay').classList.remove('open');
+});
+document.getElementById('authSendBtn').addEventListener('click', () => {
+  sendMagicLink('authEmailInput', 'authStatus', 'authSendBtn');
+});
+
+/* ---- Full-page gate shown only to brand-new visitors (no session,
+   never chosen guest mode before on this device). Offers the real
+   choice up front: sign in, or continue without an account. Once
+   either path is taken, this screen doesn't come back on this device
+   (a session persists sign-in; GUEST_CREATED_KEY persists the guest
+   choice) — see boot() below. ---- */
+document.getElementById('gateSendBtn').addEventListener('click', () => {
+  sendMagicLink('gateEmailInput', 'gateStatus', 'gateSendBtn');
+});
+document.getElementById('gateGuestBtn').addEventListener('click', () => {
+  initializeApp(); // currentUserId is still null here, so this takes the guest branch
 });
 
 document.getElementById('signOutBtn').addEventListener('click', () => {
   document.getElementById('moreOverlay').classList.remove('open');
   openConfirmDialog(
     'Sign out?',
-    'You\'ll need to click a new email link to sign back in. Your data stays saved.',
+    'You\'ll need to click a new email link to sign back in. Your account data stays saved on the server; this device will drop back to a fresh guest session.',
     async () => {
       await supabaseClient.auth.signOut();
       // Reloading is the simplest reliable way to fully reset every
       // running interval/timer and in-memory variable back to a clean
-      // slate for whoever signs in next on this device.
+      // slate for whoever uses this device next.
       window.location.reload();
     }
   );
 });
 
-// Fires on initial load (existing session, or a magic link just
-// completed) and again any time auth state changes afterward.
-supabaseClient.auth.onAuthStateChange((event, session) => {
+/** Decides what a fresh page load should show: resume a real session,
+ *  resume guest mode if this device has used it before, or — only for
+ *  a true first-time visitor — the full-page gate offering the choice. */
+function boot(session){
   if(session && session.user){
-    startApp(session.user);
-  } else if(!appStarted){
-    showAuthGate();
+    currentUserId = session.user.id;
+    currentUserEmail = session.user.email;
+    initializeApp();
+  } else if(localStorage.getItem(GUEST_CREATED_KEY)){
+    // Already chose guest mode on this device before — don't re-ask.
+    initializeApp();
+  } else {
+    document.getElementById('authGate').classList.remove('hidden');
+  }
+}
+
+// Fires once immediately with whatever the current session is (none,
+// or an existing/just-completed one), then again on any later change.
+// Only the first call drives startup — see appStarted below — later
+// SIGNED_IN events (e.g. finishing a magic link in the same tab, in
+// the rarer case that doesn't trigger a full page navigation) just
+// reload the page, which re-runs this same clean startup path instead
+// of duplicating its logic.
+supabaseClient.auth.onAuthStateChange((event, session) => {
+  if(!appStarted){
+    appStarted = true;
+    boot(session);
+  } else if(event === 'SIGNED_IN' && session && session.user && !currentUserId){
+    window.location.reload();
   }
 });
 
-// Also check directly in case onAuthStateChange's initial fire is slow —
-// belt and braces, startApp() itself is guarded against running twice.
-supabaseClient.auth.getSession().then(({ data }) => {
-  if(data && data.session && data.session.user){
-    startApp(data.session.user);
-  } else if(!appStarted){
-    showAuthGate();
-  }
-});
+// Periodic guest-expiry check, alongside the other background timers.
+setInterval(checkGuestExpiry, 60000);

@@ -19,17 +19,45 @@
 </head>
 <body>
 
-<!-- Shown before login / when signed out. Everything else lives inside
-     #appRoot and stays hidden until a session is confirmed. -->
-<div class="auth-gate" id="authGate">
+<!-- Full-page gate — shown ONLY to a brand-new visitor (no session, and
+     this device has never chosen guest mode before either). Offers a
+     real choice: sign in, or continue without an account. Whichever
+     path is taken, this screen won't show again on this device — see
+     boot() in app.js. -->
+<div class="auth-gate hidden" id="authGate">
   <div class="auth-card">
     <img src="icon-192.png" alt="" class="auth-logo">
     <h1>SyllabusTrakt</h1>
-    <p class="auth-copy">Sign in with your email to keep your syllabus and focus data private to you, synced across your devices.</p>
+    <p class="auth-copy">Sign in with your email to keep your syllabus and focus data private to you, synced across every device.</p>
+    <input class="m3-field" style="width:100%;" id="gateEmailInput" type="email" placeholder="you@example.com" autocomplete="email">
+    <button class="btn-filled wide" id="gateSendBtn" style="margin-top:10px;">Send magic link</button>
+    <p class="auth-status" id="gateStatus"></p>
+    <div class="auth-gate-divider"><span>or</span></div>
+    <button class="btn-text" id="gateGuestBtn">Continue without an account</button>
+  </div>
+</div>
+
+<!-- Sign-in dialog for LATER use (from the guest banner or % pill menu)
+     once someone's already past the gate above, in guest mode. -->
+<div class="overlay" id="signInOverlay">
+  <div class="dialog-card">
+    <img src="icon-192.png" alt="" class="auth-logo">
+    <h3>Sign in to save your data</h3>
+    <p>Enter your email and we'll send a one-time sign-in link — no password to set or remember. This keeps your syllabus and focus history private to you and synced across your devices.</p>
     <input class="m3-field" style="width:100%;" id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email">
     <button class="btn-filled wide" id="authSendBtn" style="margin-top:10px;">Send magic link</button>
     <p class="auth-status" id="authStatus"></p>
+    <div class="dialog-actions">
+      <button class="btn-text" id="signInCancelBtn">Not now</button>
+    </div>
   </div>
+</div>
+
+<!-- Shown only in guest mode: a running reminder that guest data is
+     temporary, with a one-tap way to open the sign-in dialog above. -->
+<div class="guest-banner hidden" id="guestBanner">
+  <span id="guestBannerText">Guest mode — sign in to save your data</span>
+  <button class="guest-banner-btn" id="guestBannerSignInBtn">Sign in</button>
 </div>
 
 <div class="hidden" id="appRoot">
@@ -55,6 +83,11 @@
   </div>
 
   <div id="subjects"></div>
+
+  <div class="field-row" style="margin-top:4px;">
+    <input class="m3-field" id="newSubjectInput" type="text" placeholder="Add a subject">
+    <button class="btn-filled" id="addSubjectBtn">Add</button>
+  </div>
 </div>
 
 <!-- FOCUS PAGE -->
@@ -177,8 +210,14 @@
     <button class="menu-item" id="importBtn">Import backup</button>
     <input type="file" id="importFileInput" accept="application/json" class="hidden">
     <div class="dialog-divider"></div>
-    <p class="settings-hint" id="accountEmailLabel" style="margin-bottom:8px;"></p>
-    <button class="menu-item" id="signOutBtn">Sign out</button>
+    <div id="accountGuestBlock">
+      <p class="settings-hint" style="margin-bottom:8px;">You're browsing as a guest — this device only, and cleared after 24 hours.</p>
+      <button class="menu-item" id="accountSignInBtn">Sign in to save your data</button>
+    </div>
+    <div class="hidden" id="accountSignedInBlock">
+      <p class="settings-hint" id="accountEmailLabel" style="margin-bottom:8px;"></p>
+      <button class="menu-item" id="signOutBtn">Sign out</button>
+    </div>
     <div class="dialog-divider"></div>
     <button class="menu-item danger" id="resetBtn">Reset all data</button>
     <div class="dialog-actions">
