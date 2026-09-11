@@ -1,4 +1,4 @@
-const CACHE_NAME = 'syllabustrakt-v8'; // restored full-page first-visit gate + guest bypass; editable/addable subjects; new default subjects
+const CACHE_NAME = 'syllabustrakt-v10'; // fixed collapsed subject cards leaving a visible white sliver
 const SHELL_FILES = [
   './',
   './index.html',

@@ -351,8 +351,15 @@ function renderSubjects(){
 
     card.appendChild(head);
 
+    // Outer element collapses/expands via CSS grid-template-rows (see
+    // styles.css) for a smooth, snappy height animation; the inner one
+    // holds the actual padding/content and gets clipped during that
+    // animation so chapters look like they slide out of the card
+    // rather than just popping into view.
+    const bodyOuter = document.createElement('div');
+    bodyOuter.className = 'subject-body';
     const body = document.createElement('div');
-    body.className = 'subject-body';
+    body.className = 'subject-body-inner';
 
     if(subject.chapters.length === 0){
       const note = document.createElement('div');
@@ -488,7 +495,8 @@ function renderSubjects(){
     body.appendChild(bulkToggle);
     body.appendChild(bulkArea);
 
-    card.appendChild(body);
+    bodyOuter.appendChild(body);
+    card.appendChild(bodyOuter);
     container.appendChild(card);
   });
 }
