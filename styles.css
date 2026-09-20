@@ -51,8 +51,8 @@
   --r-lg: 24px;
   --r-full: 999px;
 
-  --font-display: "Baloo 2", "Roboto Flex", sans-serif; /* rounded, playful — headings & big numbers */
-  --font-body: "Roboto Flex", "Roboto", system-ui, sans-serif;
+  --font-display: "Baloo 2", sans-serif; /* rounded, playful — headings & big numbers */
+  --font-body: "Roboto", system-ui, sans-serif;
 
   /* Fast-out, smooth-settle easing used throughout for a snappy (not
      slow, not bouncy-overshoot) feel — expand/collapse, page switches,
@@ -62,14 +62,36 @@
 }
 *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html,body{ margin:0; padding:0; }
+html{
+  /* Stops the browser's own pull-to-refresh and edge rubber-banding —
+     without this, dragging past the top/bottom of any scrollable area
+     shows the browser chrome doing its own bounce/refresh gesture,
+     which is the single biggest "this is just a website" tell on
+     Android. The app has no need for pull-to-refresh since data syncs
+     in the background on its own. */
+  overscroll-behavior:none;
+}
 body{
   background:var(--md-surface);
   color:var(--md-on-surface);
   font-family:var(--font-body);
   min-height:100vh;
   padding-bottom:calc(96px + env(safe-area-inset-bottom));
+  overscroll-behavior:none;
 }
 .hidden{ display:none !important; }
+
+/* Interactive chrome (buttons, nav, pills, icons) shouldn't behave like
+   selectable page text: no text-selection callout on long-press, and
+   no ~300ms tap delay / double-tap-to-zoom on repeated quick taps —
+   both standard browser-page behaviors that read as "website" rather
+   than "app" on a touchscreen. */
+button, .nav-item, .segment-btn, .chip, .icon-btn, .m3-check,
+.subject-head, .bottom-nav, .expand-icon{
+  touch-action:manipulation;
+  -webkit-user-select:none;
+  user-select:none;
+}
 
 /* ---------- Top app bar ---------- */
 .appbar{

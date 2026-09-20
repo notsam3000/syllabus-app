@@ -267,11 +267,14 @@ function renderTotals(){
 }
 
 /* ---------------- Home page render ---------------- */
-function renderSubjects(){
-  const container = document.getElementById('subjects');
-  container.innerHTML = '';
+function findSubjectCardEl(subjectId){
+  return document.getElementById('subjects').querySelector(`[data-id="${subjectId}"]`);
+}
 
-  state.subjects.forEach((subject, index) => {
+/** Builds one subject card's DOM subtree (header + chapter list) without
+ *  touching anything else — used both by the initial full render and by
+ *  refreshSubjectCard() below for updating a single card in place. */
+function buildSubjectCard(subject, index){
     const { total, done, pct } = subjectStats(subject);
     const isOpen = subject.id === openSubjectId;
 
@@ -293,9 +296,20 @@ function renderSubjects(){
       </div>
       <span class="expand-icon">${CHEVRON_SVG}</span>
     `;
+    // Expand/collapse toggles classes on the EXISTING nodes rather than
+    // rebuilding anything, both because there's nothing here that needs
+    // rebuilding (it's just a class flip) and because rebuilding would
+    // replace the card with a brand-new node that has no "before" state
+    // to animate from — silently killing the open/close transition.
     head.addEventListener('click', () => {
-      openSubjectId = isOpen ? null : subject.id;
-      renderSubjects();
+      const wasOpen = subject.id === openSubjectId;
+      const previousOpenId = openSubjectId;
+      openSubjectId = wasOpen ? null : subject.id;
+      card.classList.toggle('open', !wasOpen);
+      if(!wasOpen && previousOpenId){
+        const prevCard = findSubjectCardEl(previousOpenId);
+        if(prevCard) prevCard.classList.remove('open');
+      }
     });
 
     // Renaming a subject — same tap-to-edit pattern as chapters, just
@@ -317,7 +331,7 @@ function renderSubjects(){
         finished = true;
         const val = input.value.trim();
         if(val) subject.name = val;
-        renderSubjects();
+        refreshSubjectCard(subject.id);
         renderTotals();
         scheduleSave();
       };
@@ -326,7 +340,7 @@ function renderSubjects(){
       input.addEventListener('keydown', (ev) => {
         ev.stopPropagation();
         if(ev.key === 'Enter') input.blur();
-        else if(ev.key === 'Escape'){ finished = true; renderSubjects(); }
+        else if(ev.key === 'Escape'){ finished = true; refreshSubjectCard(subject.id); }
       });
     };
     subjectNameEl.addEventListener('click', startEditingSubject);
@@ -340,6 +354,9 @@ function renderSubjects(){
         'Delete subject?',
         `"${subject.name}" and all ${subject.chapters.length} of its chapters will be removed. This can't be undone.`,
         () => {
+          // Deleting shifts every later subject's index (and therefore
+          // its accent-N color), so unlike the other actions here this
+          // one genuinely needs the full list rebuilt, not just this card.
           state.subjects = state.subjects.filter(s => s.id !== subject.id);
           if(openSubjectId === subject.id) openSubjectId = null;
           renderSubjects();
@@ -382,7 +399,7 @@ function renderSubjects(){
       `;
       row.querySelector('.m3-check').addEventListener('click', () => {
         ch.done = !ch.done;
-        renderSubjects();
+        refreshSubjectCard(subject.id);
         renderTotals();
         scheduleSave();
       });
@@ -405,14 +422,14 @@ function renderSubjects(){
           finished = true;
           const val = input.value.trim();
           if(val) ch.name = val;
-          renderSubjects();
+          refreshSubjectCard(subject.id);
           renderTotals();
           scheduleSave();
         };
         const cancel = () => {
           if(finished) return;
           finished = true;
-          renderSubjects();
+          refreshSubjectCard(subject.id);
         };
         input.addEventListener('blur', commit);
         input.addEventListener('keydown', (e) => {
@@ -427,13 +444,13 @@ function renderSubjects(){
       moveUpBtn.addEventListener('click', () => {
         if(chIndex === 0) return;
         [subject.chapters[chIndex-1], subject.chapters[chIndex]] = [subject.chapters[chIndex], subject.chapters[chIndex-1]];
-        renderSubjects();
+        refreshSubjectCard(subject.id);
         scheduleSave();
       });
       moveDownBtn.addEventListener('click', () => {
         if(chIndex === subject.chapters.length - 1) return;
         [subject.chapters[chIndex+1], subject.chapters[chIndex]] = [subject.chapters[chIndex], subject.chapters[chIndex+1]];
-        renderSubjects();
+        refreshSubjectCard(subject.id);
         scheduleSave();
       });
 
@@ -443,7 +460,7 @@ function renderSubjects(){
           `"${ch.name}" will be removed from ${subject.name}. This can't be undone.`,
           () => {
             subject.chapters = subject.chapters.filter(c => c.id !== ch.id);
-            renderSubjects();
+            refreshSubjectCard(subject.id);
             renderTotals();
             scheduleSave();
           }
@@ -463,8 +480,7 @@ function renderSubjects(){
       const val = input.value.trim();
       if(!val) return;
       subject.chapters.push({ id: uid(), name: val, done: false });
-      input.value = '';
-      renderSubjects();
+      refreshSubjectCard(subject.id);
       renderTotals();
       scheduleSave();
     };
@@ -488,7 +504,7 @@ function renderSubjects(){
       lines.forEach(name => subject.chapters.push({ id: uid(), name, done: false }));
       ta.value = '';
       bulkArea.classList.remove('open');
-      renderSubjects();
+      refreshSubjectCard(subject.id);
       renderTotals();
       scheduleSave();
     });
@@ -497,8 +513,31 @@ function renderSubjects(){
 
     bodyOuter.appendChild(body);
     card.appendChild(bodyOuter);
-    container.appendChild(card);
+    return card;
+}
+
+/** Full rebuild — only needed on initial load and whenever the list of
+ *  subjects itself changes shape (add/delete/reset/import). Everyday
+ *  interactions within a single subject use refreshSubjectCard() below
+ *  instead, which touches only that one card's DOM. */
+function renderSubjects(){
+  const container = document.getElementById('subjects');
+  container.innerHTML = '';
+  state.subjects.forEach((subject, index) => {
+    container.appendChild(buildSubjectCard(subject, index));
   });
+}
+
+/** Rebuilds and swaps in just one subject's card — used for every
+ *  chapter-level edit (toggle/rename/reorder/add/delete) and subject
+ *  rename, none of which change the list's shape or any other card. */
+function refreshSubjectCard(subjectId){
+  const index = state.subjects.findIndex(s => s.id === subjectId);
+  if(index === -1) return;
+  const newCard = buildSubjectCard(state.subjects[index], index);
+  const oldCard = findSubjectCardEl(subjectId);
+  if(oldCard) oldCard.replaceWith(newCard);
+  else document.getElementById('subjects').appendChild(newCard);
 }
 
 function escapeHtml(str){
@@ -621,7 +660,9 @@ function addSubjectFromInput(){
   if(!val) return;
   state.subjects.push({ id: uid(), name: val, chapters: [] });
   input.value = '';
-  renderSubjects();
+  document.getElementById('subjects').appendChild(
+    buildSubjectCard(state.subjects[state.subjects.length - 1], state.subjects.length - 1)
+  );
   renderTotals();
   scheduleSave();
 }
@@ -681,6 +722,21 @@ let timer = {
   label: '',
   subjectId: '',
   intervalId: null
+};
+
+// Looked up once instead of on every tick — during an active session
+// tick() can fire ~1500+ times (a 25-minute pomodoro), so re-querying
+// the DOM for the same handful of nodes every single second was pure
+// waste. All of these exist in the DOM from page load onward (nothing
+// here is conditionally rendered), so caching at script-load time is safe.
+const timerDom = {
+  clock: document.getElementById('timerClock'),
+  phase: document.getElementById('timerPhase'),
+  sub: document.getElementById('timerSub'),
+  ringWrap: document.getElementById('timerRingWrap'),
+  ringProgress: document.getElementById('ringProgress'),
+  favicon: document.getElementById('faviconLink'),
+  liveDot: document.getElementById('focusLiveDot')
 };
 
 function getFocusSettings(){ return state.focus.settings; }
@@ -747,8 +803,8 @@ document.getElementById('focusSubjectSelect').addEventListener('change', (e) => 
 function setMode(mode){
   if(timer.phase !== 'idle') return; // don't allow mode switch mid-session
   timer.mode = mode;
-  document.getElementById('segPomodoro').classList.toggle('active', mode==='pomodoro');
-  document.getElementById('segStopwatch').classList.toggle('active', mode==='stopwatch');
+  segPomodoroBtn.classList.toggle('active', mode==='pomodoro');
+  segStopwatchBtn.classList.toggle('active', mode==='stopwatch');
   updateTimerDisplay();
 }
 
@@ -788,7 +844,7 @@ function startSession(){
   enterFocusFullscreen();
   ensureNotificationPermission().then(() => showRunningNotification());
 
-  renderFocusPage();
+  renderTimerChrome();
 }
 
 function pauseSession(){
@@ -798,16 +854,16 @@ function pauseSession(){
   timer.phaseStartEpoch = null;
   clearInterval(timer.intervalId);
   timer.phase = timer.phase === 'break' ? 'breakPaused' : 'paused';
-  updateRunningNotification();
-  renderFocusPage();
+  updateRunningNotification(true);
+  renderTimerChrome();
 }
 
 function resumeSession(){
   timer.phaseStartEpoch = Date.now();
   timer.phase = timer.phase === 'breakPaused' ? 'break' : 'running';
   timer.intervalId = setInterval(tick, 1000);
-  updateRunningNotification();
-  renderFocusPage();
+  updateRunningNotification(true);
+  renderTimerChrome();
 }
 
 function stopSession(){
@@ -822,9 +878,7 @@ function stopSession(){
   timer.phaseStartEpoch = null;
   exitFocusFullscreen();
   closeRunningNotification();
-  renderFocusPage();
-  renderStats();
-  renderChart();
+  renderFocusPage(); // saveSession() may have changed today's stats/chart — this already refreshes both
 }
 
 /** Runs once per second while a timer is active (though it may fire far
@@ -847,10 +901,8 @@ function tick(){
         timer.phaseStartEpoch = Date.now();
         timer.phase = 'break';
         celebratePomodoro();
-        renderStats();
-        renderChart();
-        renderFocusPage();
-        updateRunningNotification();
+        renderFocusPage(); // saveSession() changed today's stats/chart — this refreshes everything in one pass
+        updateRunningNotification(true);
         return;
       }
     } else if(timer.phase === 'break'){
@@ -886,11 +938,11 @@ const RING_CIRCUMFERENCE = 653.45; // 2 * PI * r(104), matches the SVG circle in
 
 function updateTimerDisplay(){
   const settings = getFocusSettings();
-  const clockEl = document.getElementById('timerClock');
-  const phaseEl = document.getElementById('timerPhase');
-  const subEl = document.getElementById('timerSub');
-  const ringWrap = document.getElementById('timerRingWrap');
-  const ringProgress = document.getElementById('ringProgress');
+  const clockEl = timerDom.clock;
+  const phaseEl = timerDom.phase;
+  const subEl = timerDom.sub;
+  const ringWrap = timerDom.ringWrap;
+  const ringProgress = timerDom.ringProgress;
   const elapsed = getPhaseElapsedSeconds();
   const isBreak = timer.phase === 'break' || timer.phase === 'breakPaused';
 
@@ -939,7 +991,7 @@ function updateTimerDisplay(){
  *  badge), so you can tell a session is still going without switching
  *  back to this tab — handy when you've tabbed away to a lecture video. */
 function updateTabIndicator(clockText, phaseLabel){
-  const favicon = document.getElementById('faviconLink');
+  const favicon = timerDom.favicon;
   if(clockText){
     document.title = `${clockText} · ${phaseLabel} — ${BASE_TITLE}`;
     favicon.href = 'favicon-active.png';
@@ -952,7 +1004,7 @@ function updateTabIndicator(clockText, phaseLabel){
 /** Small dot on the bottom-nav Focus icon so a running session is
  *  visible even while browsing the Home page. */
 function updateLiveDot(){
-  document.getElementById('focusLiveDot').classList.toggle('hidden', timer.phase === 'idle');
+  timerDom.liveDot.classList.toggle('hidden', timer.phase === 'idle');
 }
 
 /* ====================================================================
@@ -1024,19 +1076,37 @@ async function ensureNotificationPermission(){
 }
 
 async function showRunningNotification(){
-  updateRunningNotification();
+  updateRunningNotification(true);
 }
 
-async function updateRunningNotification(){
+let lastNotificationUpdateAt = 0;
+const NOTIFICATION_UPDATE_MIN_INTERVAL_MS = 15000;
+
+/** Posts/replaces the "still focusing" system notification.
+ *  Was previously called unconditionally every single tick (every
+ *  second) regardless of whether anyone could even see it — reposting
+ *  a notification that often is pure waste (and on some Android
+ *  versions visibly flickers the notification each time), since the
+ *  in-app ring already shows the same info while the tab is visible.
+ *  Now: skipped entirely while visible, and throttled to at most once
+ *  per NOTIFICATION_UPDATE_MIN_INTERVAL_MS while hidden — except for
+ *  real phase transitions (start/pause/resume/break), which pass
+ *  bypassThrottle so the notification reflects the new phase right
+ *  away instead of waiting out the throttle window. */
+async function updateRunningNotification(bypassThrottle){
   if(!notificationsSupported() || Notification.permission !== 'granted') return;
   if(timer.phase === 'idle') return;
+  if(!document.hidden) return; // visible tab already shows this — nothing to add by notifying too
+
+  const now = Date.now();
+  if(!bypassThrottle && (now - lastNotificationUpdateAt) < NOTIFICATION_UPDATE_MIN_INTERVAL_MS) return;
+  lastNotificationUpdateAt = now;
+
   try{
     const reg = await navigator.serviceWorker.ready;
-    const clockEl = document.getElementById('timerClock');
-    const phaseEl = document.getElementById('timerPhase');
     await reg.showNotification(BASE_TITLE, {
       tag: 'focus-timer',
-      body: `${clockEl.textContent} · ${phaseEl.textContent}${timer.label ? ' — ' + timer.label : ''}`,
+      body: `${timerDom.clock.textContent} · ${timerDom.phase.textContent}${timer.label ? ' — ' + timer.label : ''}`,
       icon: 'icon-192.png',
       silent: true,
       requireInteraction: false
@@ -1297,18 +1367,32 @@ document.getElementById('chartNextBtn').addEventListener('click', () => {
   if(chartOffset < 0){ chartOffset += 1; renderChart(); }
 });
 
-function renderFocusPage(){
-  populateSubjectSelect();
-  document.getElementById('segPomodoro').classList.toggle('active', timer.mode==='pomodoro');
-  document.getElementById('segStopwatch').classList.toggle('active', timer.mode==='stopwatch');
-  document.getElementById('segPomodoro').disabled = timer.phase !== 'idle';
-  document.getElementById('segStopwatch').disabled = timer.phase !== 'idle';
+const segPomodoroBtn = document.getElementById('segPomodoro');
+const segStopwatchBtn = document.getElementById('segStopwatch');
+const timerSetupEl = document.getElementById('timerSetup');
 
-  const setupEl = document.getElementById('timerSetup');
-  setupEl.classList.toggle('hidden', timer.phase !== 'idle');
-
+/** Refreshes just the timer's own chrome (segmented mode buttons, the
+ *  setup fields' visibility, the ring/clock, and the action buttons) —
+ *  everything a phase transition (start/pause/resume) actually needs.
+ *  Deliberately does NOT touch populateSubjectSelect/renderStats/
+ *  renderChart: those only need to change when a session is actually
+ *  saved or the syllabus list changes, not every time someone taps
+ *  Pause. Calling the heavier renderFocusPage() for those frequent taps
+ *  was recomputing the whole week/month/year chart and rebuilding the
+ *  subject dropdown for no visible reason every single time. */
+function renderTimerChrome(){
+  segPomodoroBtn.classList.toggle('active', timer.mode==='pomodoro');
+  segStopwatchBtn.classList.toggle('active', timer.mode==='stopwatch');
+  segPomodoroBtn.disabled = timer.phase !== 'idle';
+  segStopwatchBtn.disabled = timer.phase !== 'idle';
+  timerSetupEl.classList.toggle('hidden', timer.phase !== 'idle');
   updateTimerDisplay();
   renderTimerActions();
+}
+
+function renderFocusPage(){
+  populateSubjectSelect();
+  renderTimerChrome();
   renderStats();
   renderChart();
 }
@@ -1478,9 +1562,10 @@ window.addEventListener('focus', () => {
 // Belt-and-braces polling so changes from another device show up here
 // even if you never switch tabs away and back.
 setInterval(refetchAndMerge, 20000);
-// Daily reminder check — see checkDailyReminder() for the honest caveat
-// about what a plain website can and can't do here.
-setInterval(checkDailyReminder, 60000);
+// One shared 60s interval for both always-on background checks, rather
+// than two separate setInterval(...,60000) timers doing the same job
+// of "wake up once a minute" — see the callback further down (after
+// checkGuestExpiry is defined) for what it runs.
 
 // Registers the PWA service worker so the app can be installed and its
 // shell (not your data — that always comes from Supabase) loads offline.
@@ -1684,10 +1769,6 @@ function scheduleSave(){
 
 /** Runs exactly once at startup, after the very first auth-state check
  *  resolves (see the listener below) — decides guest vs. account mode
- *  and loads the right data either way. The app is visible either way;
- *  signing in is never required to start using it. */
-/** Runs exactly once at startup, after the very first auth-state check
- *  resolves (see the listener below) — decides guest vs. account mode
  *  and loads the right data either way. Called either straight from
  *  boot() (existing session, or a returning guest who already chose
  *  guest mode before) or from the full-page gate's "continue without
@@ -1830,5 +1911,10 @@ supabaseClient.auth.onAuthStateChange((event, session) => {
   }
 });
 
-// Periodic guest-expiry check, alongside the other background timers.
-setInterval(checkGuestExpiry, 60000);
+// One shared 60s interval for both always-on background checks (each
+// no-ops when it doesn't apply — e.g. checkGuestExpiry is a no-op for
+// signed-in accounts) rather than two separate timers on the same cadence.
+setInterval(() => {
+  checkDailyReminder();
+  checkGuestExpiry();
+}, 60000);
