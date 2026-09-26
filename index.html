@@ -139,6 +139,7 @@
     </div>
     <div id="statsSummary" style="font-size:14px;">0m of 4h 0m</div>
     <div class="stats-track"><div class="stats-track-fill" id="statsTrackFill" style="width:0%"></div></div>
+    <p class="settings-hint hidden" id="reminderStatusLine" style="margin-top:8px;"></p>
   </div>
 
   <div class="chart-card">
@@ -257,6 +258,26 @@
     <div class="dialog-actions">
       <button class="btn-text" id="settingsCancelBtn">Cancel</button>
       <button class="btn-filled" id="settingsSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Milestone add/edit dialog -->
+<div class="overlay" id="milestoneOverlay">
+  <div class="dialog-card">
+    <h3 id="milestoneDialogTitle">Edit milestone</h3>
+    <div class="settings-field">
+      <label for="milestoneLabelInput">Label</label>
+      <input class="m3-field" style="width:100%;" id="milestoneLabelInput" type="text" placeholder="e.g. Preboards" maxlength="24">
+    </div>
+    <div class="settings-field">
+      <label for="milestoneDateInput">Date</label>
+      <input class="m3-field" style="width:100%;" id="milestoneDateInput" type="date">
+    </div>
+    <div class="dialog-actions">
+      <button class="btn-text hidden" id="milestoneDeleteBtn" style="margin-right:auto;color:#D64545;">Delete</button>
+      <button class="btn-text" id="milestoneCancelBtn">Cancel</button>
+      <button class="btn-filled" id="milestoneSaveBtn">Save</button>
     </div>
   </div>
 </div>

@@ -182,6 +182,14 @@ button, .nav-item, .segment-btn, .chip, .icon-btn, .m3-check,
   background:rgba(255,255,255,0.5);
 }
 .chip b{ font-weight:800; }
+.chip-editable{ cursor:pointer; transition:transform 0.12s ease; }
+.chip-editable:active{ transform:scale(0.95); }
+.chip-add{
+  cursor:pointer;
+  background:transparent;
+  border:1px dashed rgba(122,46,30,0.35);
+  opacity:0.85;
+}
 
 /* ---------- Home: subject cards (expand/collapse, rotating accents) ---------- */
 .subject-card{

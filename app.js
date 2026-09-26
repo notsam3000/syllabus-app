@@ -58,6 +58,25 @@ function ensureFocusShape(){
   if(!state.focus.sessions) state.focus.sessions = [];
 }
 
+/** Default milestones for a brand-new state — editable afterwards, not
+ *  a fixed list. Kept as a function (not a shared object) so each new
+ *  state gets its own fresh copies with their own ids. */
+function defaultMilestones(){
+  return [
+    { id: uid(), label: 'Preboards', date: '2026-11-01' },
+    { id: uid(), label: 'Boards', date: '2027-02-01' }
+  ];
+}
+
+/** Backfills state.milestones for people who saved data before this
+ *  feature existed, same pattern as ensureFocusShape(). Called
+ *  everywhere ensureFocusShape() is. */
+function ensureMilestonesShape(){
+  if(!state.milestones || !Array.isArray(state.milestones)){
+    state.milestones = defaultMilestones();
+  }
+}
+
 // state.subjects  -> syllabus data (Home page)
 // state.focus     -> { settings, sessions } for the Focus page
 // Both are persisted together as one JSON blob in Supabase (see scheduleSave below).
@@ -77,7 +96,8 @@ function makeDefaultState(){
     focus: {
       settings: defaultFocusSettings(),
       sessions: []
-    }
+    },
+    milestones: defaultMilestones()
   };
 }
 
@@ -97,7 +117,7 @@ async function loadState(){
     if(error) throw error;
     if(data && data.payload && data.payload.subjects){
       state = data.payload;
-      ensureFocusShape();
+      ensureFocusShape(); ensureMilestonesShape();
       return;
     }
   }catch(e){
@@ -186,7 +206,7 @@ async function refetchAndMerge(){
     if(error) throw error;
     if(data && data.payload && data.payload.subjects){
       state = data.payload;
-      ensureFocusShape();
+      ensureFocusShape(); ensureMilestonesShape();
       renderSubjects();
       renderTotals();
       renderFocusPage();
@@ -228,15 +248,75 @@ function weeksUntil(dateStr){
 
 function renderMilestones(){
   const wrap = document.getElementById('milestones');
-  const items = [
-    { label: 'Preboards', date: '2026-11-01' },
-    { label: 'Boards', date: '2027-02-01' }
-  ];
-  wrap.innerHTML = items.map(m => {
+  wrap.innerHTML = state.milestones.map(m => {
     const w = weeksUntil(m.date);
     const wt = w === null ? 'underway' : `${w} weeks`;
-    return `<span class="chip">${m.label} <b>${wt}</b></span>`;
-  }).join('');
+    return `<button class="chip chip-editable" data-mid="${m.id}">${escapeHtml(m.label)} <b>${wt}</b></button>`;
+  }).join('') + `<button class="chip chip-add" id="addMilestoneChip">+ Add</button>`;
+
+  wrap.querySelectorAll('.chip-editable').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const m = state.milestones.find(x => x.id === chip.dataset.mid);
+      if(m) openMilestoneDialog(m);
+    });
+  });
+  document.getElementById('addMilestoneChip').addEventListener('click', () => {
+    openMilestoneDialog(null);
+  });
+}
+
+/** Add/edit/delete dialog for one milestone. Passing null opens it in
+ *  "add new" mode (no delete button, empty fields). */
+function openMilestoneDialog(milestone){
+  const overlay = document.getElementById('milestoneOverlay');
+  const labelInput = document.getElementById('milestoneLabelInput');
+  const dateInput = document.getElementById('milestoneDateInput');
+  const deleteBtn = document.getElementById('milestoneDeleteBtn');
+  const title = document.getElementById('milestoneDialogTitle');
+
+  title.textContent = milestone ? 'Edit milestone' : 'Add milestone';
+  labelInput.value = milestone ? milestone.label : '';
+  dateInput.value = milestone ? milestone.date : '';
+  deleteBtn.classList.toggle('hidden', !milestone);
+
+  overlay.classList.add('open');
+
+  const cleanup = () => {
+    overlay.classList.remove('open');
+    saveBtn.onclick = null; cancelBtn.onclick = null;
+    deleteBtn.onclick = null; overlay.onclick = null;
+  };
+  const saveBtn = document.getElementById('milestoneSaveBtn');
+  const cancelBtn = document.getElementById('milestoneCancelBtn');
+
+  saveBtn.onclick = () => {
+    const label = labelInput.value.trim();
+    const date = dateInput.value;
+    if(!label || !date) return; // keep dialog open until both are filled in
+    if(milestone){
+      milestone.label = label;
+      milestone.date = date;
+    } else {
+      state.milestones.push({ id: uid(), label, date });
+    }
+    scheduleSave();
+    renderMilestones();
+    cleanup();
+  };
+  cancelBtn.onclick = cleanup;
+  deleteBtn.onclick = () => {
+    cleanup();
+    openConfirmDialog(
+      'Remove this milestone?',
+      `"${milestone.label}" will be removed from your countdown chips.`,
+      () => {
+        state.milestones = state.milestones.filter(m => m.id !== milestone.id);
+        scheduleSave();
+        renderMilestones();
+      }
+    );
+  };
+  overlay.onclick = (e) => { if(e.target === overlay) cleanup(); };
 }
 
 function subjectStats(subject){
@@ -638,7 +718,7 @@ document.getElementById('importFileInput').addEventListener('change', (e) => {
       'This replaces everything currently in the app — all subjects, chapters, and focus history — with what\'s in this file. This can\'t be undone.',
       () => {
         state = parsed;
-        ensureFocusShape();
+        ensureFocusShape(); ensureMilestonesShape();
         openSubjectId = null;
         chartOffset = 0;
         renderSubjects();
@@ -1217,6 +1297,18 @@ function renderStats(){
   document.getElementById('statsSummary').textContent = `${fmtDuration(todaySeconds)} of ${goalStr}`;
   document.getElementById('statsTrackFill').style.width = pct + '%';
 
+  // Surface the reminder's real limitation where it's actually seen day
+  // to day, not just as fine print inside a settings dialog someone
+  // opens once. A reminder that silently never fires because the tab
+  // got closed is worse than no reminder at all.
+  const reminderLine = document.getElementById('reminderStatusLine');
+  if(settings.reminderEnabled){
+    reminderLine.textContent = `Reminder set for ${settings.reminderTime} — only fires if this tab is open then.`;
+    reminderLine.classList.remove('hidden');
+  } else {
+    reminderLine.classList.add('hidden');
+  }
+
   if(currentPage === 'focus'){
     document.getElementById('pctChip').textContent = pct + '%';
   }
@@ -1633,7 +1725,7 @@ function loadGuestState(){
     }
     try{
       state = JSON.parse(raw);
-      ensureFocusShape();
+      ensureFocusShape(); ensureMilestonesShape();
       return;
     }catch(e){
       // fall through to a fresh guest state below
@@ -1738,7 +1830,7 @@ async function maybeAdoptGuestData(){
 
   const adopt = () => {
     state = guestState;
-    ensureFocusShape();
+    ensureFocusShape(); ensureMilestonesShape();
     scheduleSave();
     localStorage.removeItem(GUEST_STATE_KEY);
     localStorage.removeItem(GUEST_CREATED_KEY);
